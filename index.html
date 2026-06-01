@@ -19,7 +19,7 @@
 </head>
 <body>
 <div class="container">
-    <h3>⚡ Быстрая стрела (автоматическая)</h3>
+    <h3>⚡ Быстрая стрела (Matrix‑сигналинг)</h3>
     <div>
         <button id="createBtn">Создать стрелу</button>
         <div id="offerLink" class="link-box" style="display:none;"></div>
@@ -36,7 +36,7 @@
 </div>
 
 <script>
-const SIGNALING = 'https://pinball-signal.stephanclaps.workers.dev';
+const MATRIX_HOMESERVER = 'https://tchncs.de';
 const statusDiv = document.getElementById('status');
 const chatDiv = document.getElementById('chat');
 const messageInput = document.getElementById('messageInput');
@@ -47,55 +47,163 @@ const offerLink = document.getElementById('offerLink');
 
 let peerConnection;
 let dataChannel;
-let sessionId;
+let sessionId;  // теперь это room_id Matrix
+let accessToken;
+let userId;
+let syncInterval;
 
+// ---------- Matrix-помощники ----------
+async function matrixRegister() {
+    const username = 'pinball_' + Math.random().toString(36).substring(2, 10);
+    const password = Math.random().toString(36).substring(2, 14);
+    const res = await fetch(`${MATRIX_HOMESERVER}/_matrix/client/v3/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            username,
+            password,
+            auth: { type: 'm.login.dummy' }
+        })
+    });
+    if (!res.ok) { statusDiv.textContent = 'Ошибка регистрации в Matrix'; return null; }
+    const data = await res.json();
+    accessToken = data.access_token;
+    userId = data.user_id;
+    return true;
+}
+
+async function matrixCreateRoom() {
+    const res = await fetch(`${MATRIX_HOMESERVER}/_matrix/client/v3/createRoom`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            room_alias_name: `pinball_${Date.now()}`,
+            name: 'Pinball Strike',
+            preset: 'public_chat'
+        })
+    });
+    if (!res.ok) { statusDiv.textContent = 'Ошибка создания комнаты'; return null; }
+    const data = await res.json();
+    return data.room_id;
+}
+
+async function matrixSendMessage(roomId, msgType, body) {
+    const txnId = Date.now() + Math.random().toString(36);
+    await fetch(`${MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${roomId}/send/${msgType}/${txnId}`, {
+        method: 'PUT',
+        headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body)
+    });
+}
+
+function matrixStartSync(roomId, onMessage) {
+    let since = '';
+    syncInterval = setInterval(async () => {
+        try {
+            const url = `${MATRIX_HOMESERVER}/_matrix/client/v3/sync?timeout=30000&since=${since}`;
+            const res = await fetch(url, {
+                headers: { 'Authorization': `Bearer ${accessToken}` }
+            });
+            if (!res.ok) return;
+            const data = await res.json();
+            since = data.next_batch;
+            const room = data.rooms?.join?.[roomId];
+            if (!room) return;
+            const events = room.timeline?.events || [];
+            for (const ev of events) {
+                if (ev.type === 'm.room.message' && ev.sender !== userId) {
+                    onMessage(ev.content.body);
+                }
+            }
+        } catch(e) {}
+    }, 2000);
+}
+
+// ---------- WebRTC (без изменений) ----------
 async function createOffer() {
     createBtn.disabled = true;
-    // Остановить предыдущий опрос, если есть
-    if (window._pollInterval) clearInterval(window._pollInterval);
-    if (peerConnection) peerConnection.close();
-    
+    // регистрируемся и создаём комнату
+    if (!await matrixRegister()) return;
+    const roomId = await matrixCreateRoom();
+    if (!roomId) return;
+    sessionId = roomId;
+
     peerConnection = new RTCPeerConnection();
     dataChannel = peerConnection.createDataChannel('chat');
     setupDataChannel(dataChannel);
-    
+
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
-    
-    const res = await fetch(SIGNALING + '/offer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sdp: peerConnection.localDescription })
+
+    // отправляем SDP в комнату
+    await matrixSendMessage(roomId, 'm.room.message', {
+        msgtype: 'm.text',
+        body: JSON.stringify({ type: 'offer', sdp: peerConnection.localDescription })
     });
-    const data = await res.json();
-    sessionId = data.id;
-    
-    // Очистить URL от старого id (если есть)
-    if (window.location.search.includes('id=')) {
-        const cleanUrl = window.location.origin + window.location.pathname;
-        window.history.replaceState(null, '', cleanUrl);
-    }
-    
-    const link = window.location.href + '?id=' + sessionId;
+
+    // слушаем ответ
+    matrixStartSync(roomId, async (msg) => {
+        try {
+            const data = JSON.parse(msg);
+            if (data.type === 'answer' && !peerConnection.currentRemoteDescription) {
+                await peerConnection.setRemoteDescription(data.sdp);
+                statusDiv.textContent = '✅ Соединение установлено!';
+            } else if (data.type === 'ice') {
+                try { await peerConnection.addIceCandidate(data.candidate); } catch(e) {}
+            }
+        } catch(e) {}
+    });
+
+    const link = window.location.href + '?room=' + encodeURIComponent(roomId);
     offerLink.style.display = 'block';
     offerLink.innerHTML = `<strong>Отправь эту ссылку другу:</strong><br>${link}`;
     statusDiv.textContent = 'Ожидание ответа...';
-    
-    pollForAnswer();
 }
 
-function pollForAnswer() {
-    const check = async () => {
-        const res = await fetch(SIGNALING + '/answer?id=' + sessionId);
-        if (res.ok) {
-            const data = await res.json();
-            await peerConnection.setRemoteDescription(data.sdp);
-            statusDiv.textContent = '✅ Соединение установлено!';
-            clearInterval(window._pollInterval);
-        }
+async function acceptOffer() {
+    const params = new URLSearchParams(window.location.search);
+    const roomId = params.get('room');
+    if (!roomId) return;
+    acceptBtn.style.display = 'none';
+    sessionId = roomId;
+
+    if (!await matrixRegister()) return;
+    // вступаем в комнату (приглашения не нужно, потому что комната public)
+    await fetch(`${MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${roomId}/join`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+    });
+
+    peerConnection = new RTCPeerConnection();
+    peerConnection.ondatachannel = (e) => {
+        dataChannel = e.channel;
+        setupDataChannel(dataChannel);
     };
-    window._pollInterval = setInterval(check, 2000);
-    check();
+
+    matrixStartSync(roomId, async (msg) => {
+        try {
+            const data = JSON.parse(msg);
+            if (data.type === 'offer') {
+                await peerConnection.setRemoteDescription(data.sdp);
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                await matrixSendMessage(roomId, 'm.room.message', {
+                    msgtype: 'm.text',
+                    body: JSON.stringify({ type: 'answer', sdp: peerConnection.localDescription })
+                });
+            } else if (data.type === 'ice') {
+                try { await peerConnection.addIceCandidate(data.candidate); } catch(e) {}
+            }
+        } catch(e) {}
+    });
+
+    statusDiv.textContent = 'Ответ отправлен. Устанавливаем соединение...';
 }
 
 function setupDataChannel(channel) {
@@ -109,36 +217,6 @@ function setupDataChannel(channel) {
         msg.textContent = `📩 Друг: ${e.data}`;
         chatDiv.appendChild(msg);
     };
-}
-
-async function acceptOffer() {
-    const params = new URLSearchParams(window.location.search);
-    sessionId = params.get('id');
-    if (!sessionId) return;
-    
-    acceptBtn.style.display = 'none';
-    
-    const res = await fetch(SIGNALING + '/offer?id=' + sessionId);
-    if (!res.ok) { statusDiv.textContent = 'Стрела не найдена или истекла.'; return; }
-    const data = await res.json();
-    
-    peerConnection = new RTCPeerConnection();
-    peerConnection.ondatachannel = (e) => {
-        dataChannel = e.channel;
-        setupDataChannel(dataChannel);
-    };
-    
-    await peerConnection.setRemoteDescription(data.sdp);
-    const answer = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answer);
-    
-    await fetch(SIGNALING + '/answer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: sessionId, sdp: peerConnection.localDescription })
-    });
-    
-    statusDiv.textContent = 'Ответ отправлен. Устанавливаем соединение...';
 }
 
 function sendMessage() {
@@ -157,7 +235,7 @@ function sendMessage() {
 createBtn.addEventListener('click', createOffer);
 sendBtn.addEventListener('click', sendMessage);
 
-if (window.location.search.includes('id=')) {
+if (window.location.search.includes('room=')) {
     acceptBtn.style.display = 'block';
     statusDiv.textContent = 'Нажми "Принять стрелу" для подключения.';
     acceptBtn.addEventListener('click', acceptOffer);
