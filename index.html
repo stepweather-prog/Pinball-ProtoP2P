@@ -30,7 +30,7 @@
     <div id="status">Ожидание действий...</div>
 
 <script>
-const SIGNALING = 'https://pinball-signaling.stephanclaps.workers.dev';
+const SIGNALING = 'https://pinball-signal.stephanclaps.workers.dev';
 const statusDiv = document.getElementById('status');
 const chatDiv = document.getElementById('chat');
 const messageInput = document.getElementById('messageInput');
@@ -52,7 +52,6 @@ async function createOffer() {
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
     
-    // Отправляем offer на Workers
     const res = await fetch(SIGNALING + '/offer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -61,13 +60,11 @@ async function createOffer() {
     const data = await res.json();
     sessionId = data.id;
     
-    // Показываем ссылку-приглашение
     const link = window.location.href + '?id=' + sessionId;
     offerLink.style.display = 'block';
     offerLink.innerHTML = `<strong>Отправь эту ссылку другу:</strong><br>${link}`;
     statusDiv.textContent = 'Ожидание ответа...';
     
-    // Опрашиваем Workers на наличие answer
     pollForAnswer();
 }
 
@@ -105,7 +102,6 @@ async function acceptOffer() {
     
     acceptBtn.style.display = 'none';
     
-    // Получаем offer с Workers
     const res = await fetch(SIGNALING + '/offer?id=' + sessionId);
     if (!res.ok) { statusDiv.textContent = 'Стрела не найдена или истекла.'; return; }
     const data = await res.json();
@@ -120,7 +116,6 @@ async function acceptOffer() {
     const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
     
-    // Отправляем answer на Workers
     await fetch(SIGNALING + '/answer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -146,7 +141,6 @@ function sendMessage() {
 createBtn.addEventListener('click', createOffer);
 sendBtn.addEventListener('click', sendMessage);
 
-// Автоматическое принятие, если в URL есть id
 if (window.location.search.includes('id=')) {
     acceptBtn.style.display = 'block';
     statusDiv.textContent = 'Нажми "Принять стрелу" для подключения.';
