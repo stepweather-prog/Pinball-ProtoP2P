@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Pinball Quick Strike</title>
+    <title>P2PPong</title>
     <style>
         html, body { margin: 0; padding: 0; height: 100%; background: #121212; color: #eee; font-family: sans-serif; }
         body { display: flex; justify-content: center; align-items: center; }
@@ -19,7 +19,7 @@
 </head>
 <body>
 <div class="container">
-    <h3>⚡ Быстрая стрела (Matrix‑сигналинг)</h3>
+    <h3>⚡ P2PPong (гостевой Matrix)</h3>
     <div>
         <button id="createBtn">Создать стрелу</button>
         <div id="offerLink" class="link-box" style="display:none;"></div>
@@ -47,28 +47,20 @@ const offerLink = document.getElementById('offerLink');
 
 let peerConnection;
 let dataChannel;
-let sessionId;  // теперь это room_id Matrix
-let accessToken;
-let userId;
+let roomId;
+let accessToken; // гостевой токен
 let syncInterval;
 
-// ---------- Matrix-помощники ----------
-async function matrixRegister() {
-    const username = 'pinball_' + Math.random().toString(36).substring(2, 10);
-    const password = Math.random().toString(36).substring(2, 14);
+// ---------- Matrix-помощники (гостевой режим) ----------
+async function matrixGuestLogin() {
     const res = await fetch(`${MATRIX_HOMESERVER}/_matrix/client/v3/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            username,
-            password,
-            auth: { type: 'm.login.dummy' }
-        })
+        body: JSON.stringify({ kind: 'guest' })
     });
-    if (!res.ok) { statusDiv.textContent = 'Ошибка регистрации в Matrix'; return null; }
+    if (!res.ok) { statusDiv.textContent = 'Ошибка гостевого входа в Matrix'; return false; }
     const data = await res.json();
     accessToken = data.access_token;
-    userId = data.user_id;
     return true;
 }
 
@@ -80,8 +72,8 @@ async function matrixCreateRoom() {
             'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-            room_alias_name: `pinball_${Date.now()}`,
-            name: 'Pinball Strike',
+            room_alias_name: `p2ppong_${Date.now()}`,
+            name: 'P2PPong Strike',
             preset: 'public_chat'
         })
     });
@@ -117,7 +109,7 @@ function matrixStartSync(roomId, onMessage) {
             if (!room) return;
             const events = room.timeline?.events || [];
             for (const ev of events) {
-                if (ev.type === 'm.room.message' && ev.sender !== userId) {
+                if (ev.type === 'm.room.message' && ev.sender !== accessToken) {
                     onMessage(ev.content.body);
                 }
             }
@@ -125,14 +117,12 @@ function matrixStartSync(roomId, onMessage) {
     }, 2000);
 }
 
-// ---------- WebRTC (без изменений) ----------
+// ---------- WebRTC ----------
 async function createOffer() {
     createBtn.disabled = true;
-    // регистрируемся и создаём комнату
-    if (!await matrixRegister()) return;
-    const roomId = await matrixCreateRoom();
+    if (!await matrixGuestLogin()) return;
+    roomId = await matrixCreateRoom();
     if (!roomId) return;
-    sessionId = roomId;
 
     peerConnection = new RTCPeerConnection();
     dataChannel = peerConnection.createDataChannel('chat');
@@ -141,13 +131,11 @@ async function createOffer() {
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
 
-    // отправляем SDP в комнату
     await matrixSendMessage(roomId, 'm.room.message', {
         msgtype: 'm.text',
         body: JSON.stringify({ type: 'offer', sdp: peerConnection.localDescription })
     });
 
-    // слушаем ответ
     matrixStartSync(roomId, async (msg) => {
         try {
             const data = JSON.parse(msg);
@@ -168,13 +156,12 @@ async function createOffer() {
 
 async function acceptOffer() {
     const params = new URLSearchParams(window.location.search);
-    const roomId = params.get('room');
+    roomId = params.get('room');
     if (!roomId) return;
     acceptBtn.style.display = 'none';
-    sessionId = roomId;
 
-    if (!await matrixRegister()) return;
-    // вступаем в комнату (приглашения не нужно, потому что комната public)
+    if (!await matrixGuestLogin()) return;
+    // вступаем в комнату
     await fetch(`${MATRIX_HOMESERVER}/_matrix/client/v3/rooms/${roomId}/join`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${accessToken}` }
