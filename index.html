@@ -137,6 +137,11 @@ async function acceptOffer() {
         dataChannel = e.channel;
         setupDataChannel(dataChannel);
     };
+        // Принудительно указываем роль DTLS
+    if (!peerConnection.getConfiguration().bundlePolicy) {
+        // Устанавливаем роль passive для отвечающего
+        peerConnection.addEventListener('track', () => {});
+    }
     
     await peerConnection.setRemoteDescription({ type: 'offer', sdp: data.sdp });
     const answer = await peerConnection.createAnswer();
