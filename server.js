@@ -23,7 +23,7 @@ const server = http.createServer((req, res) => {
             try {
                 const { sdp } = JSON.parse(body);
                 const id = crypto.randomUUID();
-                store.set(id, { sdp, expires: Date.now() + 2 * 60 * 1000 });
+                store.set(id, { sdp, expires: Date.now() + 5 * 60 * 1000 });
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ id }));
             } catch(e) {
