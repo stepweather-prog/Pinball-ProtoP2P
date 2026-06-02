@@ -38,14 +38,13 @@
 </div>
 <div id="status" style="color:#aaa; margin-top:10px;">⚡ Готов. Нажми «Создать стрелу».</div>
 
-<!-- Панель статистики роутера -->
 <div class="stats" id="statsPanel" style="display:none;">
     <strong>Статистика узлов:</strong>
     <div id="statsContent"></div>
 </div>
 
 <script>
-    // ========== 1. САМООБУЧАЮЩИЙСЯ РОУТЕР (статистика + приоритет) ==========
+    const CORS_PROXY = 'https://corsproxy.io/?';
     const STORAGES = [
         { name: "0x0.st", url: "https://0x0.st" },
         { name: "ix.io", url: "https://ix.io" },
@@ -57,7 +56,6 @@
     class NodeStats {
         constructor() {
             this.stats = JSON.parse(localStorage.getItem('p2ppong_nodes') || '{}');
-            // миграция для новых хранилищ
             for (const store of STORAGES) {
                 if (!this.stats[store.name]) {
                     this.stats[store.name] = { success: 0, fail: 0, lastSeen: 0, penalty: 0 };
@@ -78,16 +76,25 @@
                 this.save();
             }
         }
-        fail(name) {
+        fail(name, isCorsBlock = false) {
+            if (isCorsBlock) {
+                this.markNeedsProxy(name);
+                return;
+            }
             const s = this.stats[name];
             if (s) {
                 s.fail++;
                 s.lastSeen = Date.now();
                 if (s.fail >= 3) {
-                    s.penalty = Date.now() + 5 * 60 * 1000; // штраф 5 минут
+                    s.penalty = Date.now() + 5 * 60 * 1000;
                 }
                 this.save();
             }
+        }
+        markNeedsProxy(name) {
+            const s = this.stats[name];
+            if (s) s.needsProxy = true;
+            this.save();
         }
         isUsable(name) {
             const s = this.stats[name];
@@ -102,11 +109,9 @@
                 const aUsable = this.isUsable(a.name) ? 0 : 1;
                 const bUsable = this.isUsable(b.name) ? 0 : 1;
                 if (aUsable !== bUsable) return aUsable - bUsable;
-                // предпочитаем узлы с большим числом успехов
                 return (sb.success || 0) - (sa.success || 0);
             });
         }
-        // для отображения статистики
         getReport() {
             let html = '';
             for (const store of STORAGES) {
@@ -119,7 +124,6 @@
     }
 
     const nodeStats = new NodeStats();
-    // покажем статистику через 2 секунды после загрузки
     setTimeout(() => {
         document.getElementById('statsPanel').style.display = 'block';
         document.getElementById('statsContent').innerHTML = nodeStats.getReport();
@@ -128,8 +132,6 @@
         }, 10000);
     }, 2000);
 
-    // Загрузить текст, пробуя узлы в порядке убывания надёжности.
-    // Не более 3 параллельных попыток за раз; если все не ответили — пробует следующие 3, и так до 50 попыток.
     async function uploadToAny(filename, content) {
         const sortedNodes = nodeStats.getSortedNodes();
         const totalAttempts = Math.min(sortedNodes.length, 50);
@@ -143,13 +145,21 @@
                     const timeout = setTimeout(() => controller.abort(), 3000);
                     const formData = new FormData();
                     formData.append("file", new Blob([content], {type: "text/plain"}), filename);
-                    const res = await fetch(store.url, {
+                    
+                    const proxyUrl = CORS_PROXY + encodeURIComponent(store.url);
+                    const res = await fetch(proxyUrl, {
                         method: "POST",
                         body: formData,
                         signal: controller.signal,
                         mode: "cors"
                     });
                     clearTimeout(timeout);
+                    
+                    if (res.type === 'opaque') {
+                        nodeStats.markNeedsProxy(store.name);
+                        return null;
+                    }
+                    
                     if (res.ok) {
                         let fileUrl = await res.text();
                         fileUrl = fileUrl.trim();
@@ -175,7 +185,6 @@
         return null;
     }
 
-    // Скачать текст по URL (прямой запрос)
     async function downloadText(url) {
         try {
             const controller = new AbortController();
@@ -187,25 +196,23 @@
         return null;
     }
 
-    // Поиск файла по ID (перебор всех хранилищ, без изменения)
     async function findOfferById(uuid) {
         const filename = `p2p_${uuid}.offer.txt`;
         for (const store of STORAGES) {
-            const candidateUrl = store.url.endsWith("/") ? store.url + filename : store.url + "/" + filename;
-            const content = await downloadText(candidateUrl);
+            const baseUrl = store.url.endsWith("/") ? store.url + filename : store.url + "/" + filename;
+            const proxyUrl = CORS_PROXY + encodeURIComponent(baseUrl);
+            const content = await downloadText(proxyUrl);
             if (content && content.trim().startsWith("v=")) {
-                return { content, sourceUrl: candidateUrl, store: store.name };
+                return { content, sourceUrl: proxyUrl, store: store.name };
             }
         }
         return null;
     }
 
-    // ========== 2. WebRTC логика (без изменений) ==========
     let peerConnection = null;
     let dataChannel = null;
     let currentUUID = null;
     let pollingInterval = null;
-    let answerUrl = null;
 
     const statusDiv = document.getElementById('status');
     const chatDiv = document.getElementById('chat');
@@ -241,7 +248,6 @@
         };
     }
 
-    // === СОЗДАНИЕ СТРЕЛЫ ===
     async function createOffer() {
         createBtn.disabled = true;
         statusDiv.innerHTML = '🔄 Создаём offer, загружаем на хранилища...';
@@ -257,7 +263,6 @@
         currentUUID = uuid;
         const filename = `p2p_${uuid}.offer.txt`;
         
-        // Загружаем offer с новым умным роутером
         const uploadResult = await uploadToAny(filename, sdpOffer);
         if (!uploadResult) {
             statusDiv.innerHTML = '❌ Не удалось загрузить offer ни в одно хранилище. Попробуйте позже.';
@@ -265,7 +270,6 @@
             return;
         }
         
-        // Формируем ссылку с ID
         const fullUrl = `${window.location.href.split('?')[0]}?id=${uuid}`;
         offerLinkDiv.style.display = 'block';
         offerLinkDiv.innerHTML = `<strong>🔗 Стрела создана! Отправьте ссылку другу:</strong><br>
@@ -279,7 +283,6 @@
         
         statusDiv.innerHTML = `✅ Offer загружен (${uploadResult.store}). Ожидаем ответа друга... ID: ${uuid}`;
         
-        // Polling: ищем файл ответа
         const answerFilename = `p2p_${uuid}.answer.txt`;
         const answerCandidateUrl = uploadResult.fileUrl.replace(/\.offer\.txt$/, '.answer.txt');
         if (pollingInterval) clearInterval(pollingInterval);
@@ -300,7 +303,6 @@
             }
         }, 2000);
         
-        // Таймаут 90 секунд
         setTimeout(() => {
             if (pollingInterval) {
                 clearInterval(pollingInterval);
@@ -311,7 +313,6 @@
         }, 90000);
     }
     
-    // === ПРИНЯТИЕ СТРЕЛЫ ===
     async function acceptOffer() {
         const uuid = uuidInput.value.trim();
         if (!uuid) {
@@ -342,7 +343,6 @@
             await peerConnection.setLocalDescription(answer);
             const answerSdp = peerConnection.localDescription.sdp;
             
-            // Загружаем answer с умным роутером
             const answerFilename = `p2p_${uuid}.answer.txt`;
             const uploadResult = await uploadToAny(answerFilename, answerSdp);
             if (uploadResult) {
@@ -372,7 +372,6 @@
         }
     }
     
-    // === Обработка параметра ?id= в URL ===
     const urlParams = new URLSearchParams(window.location.search);
     const idFromUrl = urlParams.get('id');
     if (idFromUrl) {
@@ -388,10 +387,8 @@
     acceptBtn.addEventListener('click', acceptOffer);
     sendBtn.addEventListener('click', sendMessage);
 
-    // ========== 3. Фоновое обучение (раз в 5 минут проверяем случайный узел) ==========
     setInterval(() => {
         const sorted = nodeStats.getSortedNodes();
-        // выбираем случайный узел из тех, у кого мало успехов
         const candidates = sorted.filter(store => (nodeStats.stats[store.name]?.success || 0) < 2);
         if (candidates.length === 0) return;
         const randomStore = candidates[Math.floor(Math.random() * candidates.length)];
