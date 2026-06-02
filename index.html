@@ -127,9 +127,8 @@ async function acceptOffer() {
     
     acceptBtn.style.display = 'none';
     
-    // Получаем offer с Render
     const res = await fetch(RENDER_SERVER + '/offer?id=' + sessionId);
-    if (!res.ok) { statusDiv.textContent = 'Стрела не найдена !'; return; }
+    if (!res.ok) { statusDiv.textContent = 'Стрела не найдена или истекла.'; return; }
     const data = await res.json();
     
     peerConnection = new RTCPeerConnection();
@@ -137,15 +136,24 @@ async function acceptOffer() {
         dataChannel = e.channel;
         setupDataChannel(dataChannel);
     };
-        // Принудительно указываем роль DTLS
-    if (!peerConnection.getConfiguration().bundlePolicy) {
-        // Устанавливаем роль passive для отвечающего
-        peerConnection.addEventListener('track', () => {});
+    
+    try {
+        await peerConnection.setRemoteDescription({ type: 'offer', sdp: data.sdp });
+    } catch(e) {
+        statusDiv.textContent = 'Ошибка offer: ' + e.message;
+        return;
     }
     
-    await peerConnection.setRemoteDescription({ type: 'offer', sdp: data.sdp });
     const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
+    
+    // Ждём завершения сбора ICE-кандидатов
+    await new Promise(resolve => {
+        if (peerConnection.iceGatheringState === 'complete') resolve();
+        else peerConnection.addEventListener('icegatheringstatechange', () => {
+            if (peerConnection.iceGatheringState === 'complete') resolve();
+        });
+    });
     
     // Отправляем answer на Render
     const ctrl = new AbortController();
@@ -167,7 +175,6 @@ async function acceptOffer() {
         statusDiv.textContent = 'Сервер не отвечает.';
     }
 }
-
 function sendMessage() {
     if (dataChannel && dataChannel.readyState === 'open') {
         const text = messageInput.value.trim();
