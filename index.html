@@ -131,7 +131,9 @@ async function acceptOffer() {
     if (!res.ok) { statusDiv.textContent = 'Стрела не найдена или истекла.'; return; }
     const data = await res.json();
     
-    peerConnection = new RTCPeerConnection();
+    peerConnection = new RTCPeerConnection({
+        iceTransportPolicy: 'all'
+    });
     peerConnection.ondatachannel = (e) => {
         dataChannel = e.channel;
         setupDataChannel(dataChannel);
@@ -155,7 +157,7 @@ async function acceptOffer() {
         });
     });
     
-    // Отправляем answer на Render
+    // Отправляем финальный answer (собранный) на Render
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 80000);
     try {
