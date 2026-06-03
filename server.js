@@ -35,9 +35,7 @@ function cleanupSessions() {
     if (remaining.length > MAX_SESSIONS) {
         const sorted = remaining.sort((a, b) => sessions[a].createdAt - sessions[b].createdAt);
         const toDelete = sorted.slice(0, remaining.length - MAX_SESSIONS);
-        for (const id of toDelete) {
-            delete sessions[id];
-        }
+        for (const id of toDelete) { delete sessions[id]; }
     }
 }
 
@@ -50,21 +48,14 @@ const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     
-    if (req.method === 'OPTIONS') {
-        res.writeHead(204);
-        res.end();
-        return;
-    }
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
     
     const url = new URL(req.url, `http://${req.headers.host}`);
     const path = url.pathname;
     const params = url.searchParams;
     
     let body = '';
-    req.on('data', chunk => {
-        body += chunk.toString();
-        if (body.length > 100000) { res.writeHead(413); res.end(); }
-    });
+    req.on('data', chunk => { body += chunk.toString(); if (body.length > 100000) { res.writeHead(413); res.end(); } });
     
     req.on('end', () => {
         let p = {};
@@ -79,6 +70,7 @@ const server = http.createServer((req, res) => {
                 receiverToken: generateToken(),
                 expectedCreator: p.creatorId,
                 expectedReceiver: null,
+                receiverReady: false,
                 offer: null,
                 answer: null,
                 verified: false
@@ -92,9 +84,19 @@ const server = http.createServer((req, res) => {
             const s = sessions[p.sessionId];
             if (s.expectedReceiver && s.expectedReceiver !== p.receiverId) { res.writeHead(403); res.end('{}'); return; }
             s.expectedReceiver = p.receiverId;
+            s.receiverReady = true;
             touchSession(p.sessionId);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ token: s.receiverToken }));
+        }
+        else if (req.method === 'GET' && path === '/session') {
+            const id = params.get('id'), t = params.get('token');
+            if (!id || !t) { res.writeHead(400); res.end('{}'); return; }
+            if (!sessions[id]) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ status: 'waiting' })); return; }
+            if (!validateToken(id, t, 'creator')) { res.writeHead(403); res.end('{}'); return; }
+            touchSession(id);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ receiverReady: sessions[id].receiverReady }));
         }
         else if (req.method === 'POST' && path === '/verify') {
             if (!p.sessionId || !p.token || !p.receiverId) { res.writeHead(400); res.end('{}'); return; }
@@ -150,6 +152,4 @@ const server = http.createServer((req, res) => {
 
 setInterval(cleanupSessions, CLEANUP_INTERVAL);
 
-server.listen(PORT, () => {
-    console.log(`Signal server running on port ${PORT}`);
-});
+server.listen(PORT, () => { console.log('Signal server on ' + PORT); });
