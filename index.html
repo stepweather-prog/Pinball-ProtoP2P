@@ -12,17 +12,11 @@
     </style>
 </head>
 <body>
-<div class="container">
-    <h3>P2PPong</h3>
-    <div id="status"></div>
-</div>
-
+<div class="container"><h3>P2PPong</h3><div id="status"></div></div>
 <script>
 const RENDER_SERVER = 'https://p2ppong.onrender.com';
 const statusDiv = document.getElementById('status');
-
 let pc, dc, sid, handshakeSecret, sessionSecret, creatorToken, receiverToken;
-
 const MY_ID = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2);
 
 function generateToken() {
@@ -42,17 +36,13 @@ async function apiCall(method, path, body = null) {
     } catch(e) { clearTimeout(to); return null; }
 }
 
-function sendToParent(msg) {
-    if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*');
-}
+function sendToParent(msg) { if (window.parent && window.parent !== window) window.parent.postMessage(msg, '*'); }
 
 function setupDataChannel(channel) {
     channel.onopen = () => { statusDiv.textContent = 'Канал открыт'; };
     channel.onmessage = (e) => {
         let text = e.data;
-        if (sessionSecret) {
-            try { text = decrypt(text, sessionSecret); } catch(err) {}
-        }
+        if (sessionSecret) { try { text = decrypt(text, sessionSecret); } catch(err) {} }
         sendToParent({ type: 'message', text: text, sender: 'Друг' });
     };
 }
@@ -68,9 +58,7 @@ function decrypt(text, key) {
 async function waitForIceComplete(pc) {
     return new Promise(resolve => {
         if (pc.iceGatheringState === 'complete') resolve();
-        else pc.addEventListener('icegatheringstatechange', () => {
-            if (pc.iceGatheringState === 'complete') resolve();
-        });
+        else pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') resolve(); });
     });
 }
 
@@ -90,16 +78,10 @@ async function checkRender() {
 
 async function createSession() {
     statusDiv.textContent = 'Создание сессии...';
-    
     const res = await apiCall('POST', '/session', { creatorId: MY_ID });
-    if (!res || !res.token) {
-        sendToParent({ type: 'error', text: 'Сервер не отвечает' });
-        return;
-    }
-    
+    if (!res || !res.token) { sendToParent({ type: 'error', text: 'Сервер не отвечает' }); return; }
     sid = res.sessionId;
     creatorToken = res.token;
-    
     sendToParent({ type: 'session-created', sessionId: sid });
     sendToParent({ type: 'status', text: 'Ожидаю получателя...' });
     
@@ -107,41 +89,22 @@ async function createSession() {
     const startTime = Date.now();
     while (Date.now() - startTime < 90000) {
         const check = await apiCall('GET', `/session?id=${sid}&token=${creatorToken}`);
-        if (check && check.receiverReady) {
-            joined = true;
-            break;
-        }
+        if (check && check.receiverReady) { joined = true; break; }
         await new Promise(r => setTimeout(r, 2000));
     }
+    if (!joined) { sendToParent({ type: 'error', text: 'Таймаут ожидания' }); return; }
     
-    if (!joined) {
-        sendToParent({ type: 'error', text: 'Таймаут ожидания' });
-        return;
-    }
-    
-    const verifyRes = await apiCall('POST', '/verify', {
-        sessionId: sid,
-        token: creatorToken,
-        receiverId: 'confirmed'
-    });
-    
-    if (!verifyRes || verifyRes.status !== 'verified') {
-        sendToParent({ type: 'error', text: 'Ошибка верификации' });
-        return;
-    }
+    const verifyRes = await apiCall('POST', '/verify', { sessionId: sid, token: creatorToken, receiverId: 'confirmed' });
+    if (!verifyRes || verifyRes.status !== 'verified') { sendToParent({ type: 'error', text: 'Ошибка верификации' }); return; }
     
     sendToParent({ type: 'status', text: 'Создание канала...' });
-    
     pc = new RTCPeerConnection();
     dc = pc.createDataChannel('chat');
     setupDataChannel(dc);
-    
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await waitForIceComplete(pc);
-    
     await apiCall('POST', '/offer', { sessionId: sid, token: creatorToken, sdp: pc.localDescription.sdp });
-    
     sendToParent({ type: 'status', text: 'Ожидание ответа...' });
     
     let answerSdp = null;
@@ -151,14 +114,8 @@ async function createSession() {
         if (ans && ans.sdp) { answerSdp = ans.sdp; break; }
         await new Promise(r => setTimeout(r, 2000));
     }
-    
-    if (!answerSdp) {
-        sendToParent({ type: 'error', text: 'Таймаут ответа' });
-        return;
-    }
-    
+    if (!answerSdp) { sendToParent({ type: 'error', text: 'Таймаут ответа' }); return; }
     await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-    
     sessionSecret = generateToken();
     sendToParent({ type: 'channel-open', secret: sessionSecret });
     statusDiv.textContent = 'Канал открыт';
@@ -167,15 +124,9 @@ async function createSession() {
 async function acceptSession(id) {
     sid = id;
     statusDiv.textContent = 'Подключение...';
-    
     const res = await apiCall('POST', '/join', { sessionId: sid, receiverId: MY_ID });
-    if (!res || !res.token) {
-        sendToParent({ type: 'error', text: 'Не могу подключиться' });
-        return;
-    }
-    
+    if (!res || !res.token) { sendToParent({ type: 'error', text: 'Не могу подключиться' }); return; }
     receiverToken = res.token;
-    
     sendToParent({ type: 'status', text: 'Ожидание предложения...' });
     
     let offerSdp = null;
@@ -185,61 +136,50 @@ async function acceptSession(id) {
         if (off && off.sdp) { offerSdp = off.sdp; break; }
         await new Promise(r => setTimeout(r, 2000));
     }
-    
-    if (!offerSdp) {
-        sendToParent({ type: 'error', text: 'Таймаут предложения' });
-        return;
-    }
+    if (!offerSdp) { sendToParent({ type: 'error', text: 'Таймаут предложения' }); return; }
     
     sendToParent({ type: 'status', text: 'Создание ответа...' });
-    
     pc = new RTCPeerConnection();
-    pc.ondatachannel = (e) => {
-        dc = e.channel;
-        setupDataChannel(dc);
-    };
-    
+    pc.ondatachannel = (e) => { dc = e.channel; setupDataChannel(dc); };
     await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     await waitForIceComplete(pc);
-    
     await apiCall('POST', '/answer', { sessionId: sid, token: receiverToken, sdp: pc.localDescription.sdp });
     
-    sendToParent({ type: 'status', text: 'Ожидание открытия канала...' });
+    sessionSecret = generateToken();
+    sendToParent({ type: 'channel-open', secret: sessionSecret });
+    statusDiv.textContent = 'Канал открыт';
 }
 
 window.addEventListener('message', (event) => {
     const data = event.data;
     if (!data || !data.action) return;
     
-    if (data.action !== 'handshake' && data.action !== 'create' && data.action !== 'accept' && data.action !== 'ping') {
-    if (!data.secret || data.secret !== sessionSecret) {
+    if (data.action === 'handshake') {
+        if (data.handshake === handshakeSecret) {
+            handshakeSecret = null;
+            sendToParent({ type: 'handshake-ok' });
+        }
+        return;
+    }
+    
+    if (data.action === 'send') {
+        if (!data.secret || data.secret !== sessionSecret) {
             sendToParent({ type: 'error', text: 'Неверный секрет' });
             return;
         }
+        if (dc && dc.readyState === 'open') {
+            let text = data.text;
+            if (sessionSecret) text = encrypt(text, sessionSecret);
+            dc.send(text);
+        }
+        return;
     }
     
     switch(data.action) {
-        case 'handshake':
-            if (data.handshake === handshakeSecret) {
-                handshakeSecret = null;
-                sendToParent({ type: 'handshake-ok' });
-            }
-            break;
-        case 'create':
-            createSession();
-            break;
-        case 'accept':
-            acceptSession(data.id);
-            break;
-        case 'send':
-            if (dc && dc.readyState === 'open') {
-                let text = data.text;
-                if (sessionSecret) text = encrypt(text, sessionSecret);
-                dc.send(text);
-            }
-            break;
+        case 'create': createSession(); break;
+        case 'accept': acceptSession(data.id); break;
     }
 });
 
