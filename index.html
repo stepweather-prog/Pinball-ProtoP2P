@@ -80,7 +80,7 @@ async function checkRender() {
         sendToParent({ type: 'pong-ready', robinToken: robinToken });
     } else {
         statusDiv.textContent = 'Сервер не отвечает';
-        setTimeout(checkRender, 5000);
+        setTimeout(checkRender, 95000);
     }
 }
 
@@ -143,7 +143,7 @@ async function waitForMatch() {
     while (Date.now() - startTime < 90000) {
         const res = await apiCall('GET', `/session?id=${sessionId}&token=${sessionToken}`);
         if (res && res.status === 'matched') return true;
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 5000));
     }
     return false;
 }
@@ -153,7 +153,7 @@ async function waitForAnswer() {
     while (Date.now() - startTime < 90000) {
         const res = await apiCall('GET', `/answer?id=${sessionId}&token=${sessionToken}`);
         if (res && res.sdp) return res.sdp;
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 5000));
     }
     return null;
 }
@@ -209,7 +209,7 @@ async function waitForOffer() {
     while (Date.now() - startTime < 90000) {
         const res = await apiCall('GET', `/offer?id=${sessionId}&token=${sessionToken}`);
         if (res && res.sdp) return res.sdp;
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 15000));
     }
     return null;
 }
@@ -276,7 +276,7 @@ async function handleManualSdp(sdpText) {
             await pc.setRemoteDescription(sdpObj);
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            sendToParent({ type: 'status', text: 'Ответ готов: ' + JSON.stringify(pc.localDescription), duration: 10000 });
+            sendToParent({ type: 'status', text: 'Ответ готов: ' + JSON.stringify(pc.localDescription), duration: 20000 });
         } else {
             dataChannel = pc.createDataChannel('chat');
             setupDataChannel(dataChannel);
