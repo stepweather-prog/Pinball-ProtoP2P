@@ -47,6 +47,9 @@ const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
     
@@ -96,7 +99,10 @@ const server = http.createServer((req, res) => {
             if (!validateToken(id, t, 'creator')) { res.writeHead(403); res.end('{}'); return; }
             touchSession(id);
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ receiverReady: sessions[id].receiverReady }));
+            res.end(JSON.stringify({ 
+            receiverReady: sessions[id].receiverReady,
+            receiverId: sessions[id].expectedReceiver 
+     }));
         }
         else if (req.method === 'POST' && path === '/verify') {
             if (!p.sessionId || !p.token || !p.receiverId) { res.writeHead(400); res.end('{}'); return; }
