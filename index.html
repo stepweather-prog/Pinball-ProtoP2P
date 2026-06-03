@@ -24,12 +24,17 @@ const statusDiv = document.getElementById('status');
 let peerConnection;
 let dataChannel;
 let sessionId;
-let myRole = null; // 'creator' или 'receiver'
-let parentOrigin = '*';
+let myRole = null;
+let sessionToken = null; // Токен для Render
+let robinToken = null; // Токен для RobinHood
 
 // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 function generateUUID() {
     return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15);
+}
+
+function generateRobinToken() {
+    return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 }
 
 async function apiCall(method, path, body = null) {
@@ -59,13 +64,20 @@ function sendToParent(msg) {
     }
 }
 
+// Проверка токена Робина
+function validateRobinToken(token) {
+    return robinToken && token === robinToken;
+}
+
 // ========== ПРОВЕРКА RENDER ==========
 async function checkRender() {
     statusDiv.textContent = 'Проверяю сервер...';
     const ping = await apiCall('GET', '/ping');
     if (ping) {
+        // Генерируем токен для Робина
+        robinToken = generateRobinToken();
         statusDiv.textContent = 'Понг готов';
-        sendToParent({ type: 'pong-ready' });
+        sendToParent({ type: 'pong-ready', robinToken: robinToken });
     } else {
         statusDiv.textContent = 'Сервер не отвечает';
         setTimeout(checkRender, 5000);
@@ -81,16 +93,17 @@ async function createSession() {
     
     // Шаг 1: Создаём сессию на Render
     const sessionRes = await apiCall('POST', '/session', { sessionId: sessionId, role: 'creator' });
-    if (!sessionRes) {
+    if (!sessionRes || !sessionRes.token) {
         sendToParent({ type: 'error', text: 'Сервер не отвечает.' });
         return;
     }
     
-    // Отдаём sessionId RobinHood'у
+    sessionToken = sessionRes.token;
+    
     sendToParent({ type: 'session-created', sessionId: sessionId });
     sendToParent({ type: 'status', text: 'Ожидаю получателя...', duration: 0 });
     
-    // Шаг 2: Ждём получателя (опрашиваем /session пока не matched)
+    // Шаг 2: Ждём получателя
     const matched = await waitForMatch();
     if (!matched) {
         sendToParent({ type: 'error', text: 'Таймаут: получатель не появился.' });
@@ -109,8 +122,8 @@ async function createSession() {
     
     await waitForIceComplete();
     
-    // Шаг 4: Отправляем offer на Render
-    await apiCall('POST', '/offer', { sessionId: sessionId, sdp: peerConnection.localDescription.sdp });
+    // Шаг 4: Отправляем offer с токеном
+    await apiCall('POST', '/offer', { sessionId: sessionId, sdp: peerConnection.localDescription.sdp, token: sessionToken });
     
     sendToParent({ type: 'status', text: 'Жду ответа...', duration: 0 });
     
@@ -128,7 +141,7 @@ async function createSession() {
 async function waitForMatch() {
     const startTime = Date.now();
     while (Date.now() - startTime < 90000) {
-        const res = await apiCall('GET', '/session?id=' + sessionId);
+        const res = await apiCall('GET', `/session?id=${sessionId}&token=${sessionToken}`);
         if (res && res.status === 'matched') return true;
         await new Promise(r => setTimeout(r, 2000));
     }
@@ -138,7 +151,7 @@ async function waitForMatch() {
 async function waitForAnswer() {
     const startTime = Date.now();
     while (Date.now() - startTime < 90000) {
-        const res = await apiCall('GET', '/answer?id=' + sessionId);
+        const res = await apiCall('GET', `/answer?id=${sessionId}&token=${sessionToken}`);
         if (res && res.sdp) return res.sdp;
         await new Promise(r => setTimeout(r, 2000));
     }
@@ -155,10 +168,12 @@ async function acceptSession(id) {
     
     // Шаг 1: Отмечаемся как получатель
     const sessionRes = await apiCall('POST', '/session', { sessionId: sessionId, role: 'receiver' });
-    if (!sessionRes) {
+    if (!sessionRes || !sessionRes.token) {
         sendToParent({ type: 'error', text: 'Сервер не отвечает.' });
         return;
     }
+    
+    sessionToken = sessionRes.token;
     
     sendToParent({ type: 'status', text: 'Жду offer...', duration: 0 });
     
@@ -184,15 +199,15 @@ async function acceptSession(id) {
     
     await waitForIceComplete();
     
-    // Шаг 4: Отправляем answer
-    await apiCall('POST', '/answer', { sessionId: sessionId, sdp: peerConnection.localDescription.sdp });
+    // Шаг 4: Отправляем answer с токеном
+    await apiCall('POST', '/answer', { sessionId: sessionId, sdp: peerConnection.localDescription.sdp, token: sessionToken });
     sendToParent({ type: 'channel-open' });
 }
 
 async function waitForOffer() {
     const startTime = Date.now();
     while (Date.now() - startTime < 90000) {
-        const res = await apiCall('GET', '/offer?id=' + sessionId);
+        const res = await apiCall('GET', `/offer?id=${sessionId}&token=${sessionToken}`);
         if (res && res.sdp) return res.sdp;
         await new Promise(r => setTimeout(r, 2000));
     }
@@ -218,10 +233,18 @@ async function waitForIceComplete() {
     });
 }
 
-// ========== СЛУШАЕМ КОМАНДЫ ОТ ROBINHOOD ==========
+// ========== СЛУШАЕМ КОМАНДЫ ОТ ROBINHOOD (с проверкой токена) ==========
 window.addEventListener('message', (event) => {
     const data = event.data;
     if (!data || !data.action) return;
+    
+    // Проверка токена для всех команд кроме первой (pong-ready уже отправлен с токеном)
+    if (data.action !== 'ping') {
+        if (!data.robinToken || !validateRobinToken(data.robinToken)) {
+            sendToParent({ type: 'error', text: 'Неверный токен доступа.' });
+            return;
+        }
+    }
     
     switch(data.action) {
         case 'create':
