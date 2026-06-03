@@ -88,16 +88,19 @@ async function createSession() {
     sendToParent({ type: 'session-created', sessionId: sid });
     sendToParent({ type: 'status', text: 'Ожидаю получателя...' });
     
-    let joined = false;
+        let receiverId = null;
     const startTime = Date.now();
     while (Date.now() - startTime < 90000) {
         const check = await apiCall('GET', `/session?id=${sid}&token=${creatorToken}`);
-        if (check && check.receiverReady) { joined = true; break; }
+        if (check && check.receiverReady) { 
+            receiverId = check.receiverId;
+            break; 
+        }
         await new Promise(r => setTimeout(r, 2000));
     }
-    if (!joined) { sendToParent({ type: 'error', text: 'Таймаут ожидания' }); return; }
+    if (!receiverId) { sendToParent({ type: 'error', text: 'Таймаут ожидания' }); return; }
     
-    const verifyRes = await apiCall('POST', '/verify', { sessionId: sid, token: creatorToken, receiverId: 'confirmed' });
+    const verifyRes = await apiCall('POST', '/verify', { sessionId: sid, token: creatorToken, receiverId: receiverId });
     if (!verifyRes || verifyRes.status !== 'verified') { sendToParent({ type: 'error', text: 'Ошибка верификации' }); return; }
     
     sendToParent({ type: 'status', text: 'Создание канала...' });
