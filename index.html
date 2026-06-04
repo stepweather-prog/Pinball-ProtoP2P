@@ -118,7 +118,7 @@ async function createSession() {
     const sid = beaconRes.sessionId;
     const sessionSecret = await sha256(tempKey);
     channels[sid] = { pc: null, dc: null, tempKey, sessionSecret, status: 'waiting', isCreator: true };
-    const link = 'https://stepweather-prog.github.io/RobinHood-messenger/?id=' + sid + '&key=' + tempKey;
+    const link = 'https://stepweather-prog.github.io/ROBINHOOD-P2P/?id=' + sid + '&key=' + tempKey;
     sendToParent({ type: 'session-created', sessionId: sid, key: tempKey, fullLink: link });
     sendToParent({ type: 'status', text: 'Ожидаю получателя...' });
     
