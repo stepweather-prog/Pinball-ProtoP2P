@@ -25,6 +25,13 @@ const MAX_CHANNELS = isPWA ? 20 : 2;
 let channels = {};
 let handshakeSecret = null;
 
+const iceServers = {
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+    ]
+};
+
 function generateToken() { return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2)+Math.random().toString(36).substring(2); }
 
 async function sha256(text) {
@@ -131,7 +138,7 @@ async function createSession() {
     if (!matched) { delete channels[sid]; sendToParent({ type: 'error', text: 'Таймаут ожидания' }); return; }
     
     sendToParent({ type: 'status', text: 'Создание канала...' });
-    const pc = new RTCPeerConnection(); const dc = pc.createDataChannel('chat');
+    const pc = new RTCPeerConnection(iceServers); const dc = pc.createDataChannel('chat');
     channels[sid].pc = pc; channels[sid].dc = dc; setupDataChannel(dc, sid, true);
     const offer = await pc.createOffer(); await pc.setLocalDescription(offer); await waitForIceComplete(pc);
     await apiCall('POST', '/offer', { sessionId: sid, sdp: pc.localDescription.sdp });
@@ -174,7 +181,7 @@ async function acceptSession(sid, tempKey) {
     if (!offerSdp) { delete channels[actualSid]; sendToParent({ type: 'error', text: 'Таймаут предложения' }); return; }
     
     sendToParent({ type: 'status', text: 'Создание ответа...' });
-    const pc = new RTCPeerConnection(); channels[actualSid].pc = pc;
+    const pc = new RTCPeerConnection(iceServers); channels[actualSid].pc = pc;
     pc.ondatachannel = (e) => { channels[actualSid].dc = e.channel; setupDataChannel(e.channel, actualSid, false); };
     await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
     const answer = await pc.createAnswer(); await pc.setLocalDescription(answer); await waitForIceComplete(pc);
