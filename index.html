@@ -144,7 +144,8 @@ async function createSession() {
     const pc = new RTCPeerConnection(iceServers); const dc = pc.createDataChannel('chat');
     channels[sid].pc = pc; channels[sid].dc = dc; setupDataChannel(dc, sid, true);
     const offer = await pc.createOffer(); await pc.setLocalDescription(offer); await waitForIceComplete(pc);
-    await apiCall('POST', '/offer', { sessionId: sid, sdp: pc.localDescription.sdp });
+        await apiCall('POST', '/offer', { sessionId: sid, sdp: pc.localDescription.sdp });
+    await new Promise(r => setTimeout(r, 2000));
     sendToParent({ type: 'status', text: 'Ожидание ответа...' });
     
     let answerSdp = null; const ansStart = Date.now();
@@ -176,7 +177,7 @@ async function acceptSession(sid, tempKey) {
     
     sendToParent({ type: 'status', text: 'Ожидание предложения...' });
     let offerSdp = null; const offStart = Date.now();
-    while (Date.now() - offStart < 90000) {
+    while (Date.now() - offStart < 120000) {
         const off = await apiCall('GET', '/offer?id=' + actualSid);
         if (off && off.sdp) { offerSdp = off.sdp; break; }
         await new Promise(r => setTimeout(r, 2000));
