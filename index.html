@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>P2PPong v3.0</title>
+    <title>P2PPong v3.1</title>
     <style>
         html,
         body {
@@ -32,28 +32,17 @@
             margin: 5px 0;
             word-break: break-all;
         }
-        .debug-info {
-            color: #666;
-            font-size: 0.7em;
-            margin-top: 15px;
-            padding: 8px;
-            background: #1a1a1a;
-            border-radius: 8px;
-            display: none;
-        }
     </style>
 </head>
 <body>
     <div class="container">
         <h3>🏹 P2PPong v3.1</h3>
         <div id="status">Пробуждение сервера...</div>
-        <div class="debug-info" id="debug-info"></div>
     </div>
     <script>
         (function() {
             const RENDER_SERVER = 'https://p2ppong.onrender.com';
             const statusDiv = document.getElementById('status');
-            const debugDiv = document.getElementById('debug-info');
             const MY_ID = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2);
             const isPWA = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
             const MAX_CHANNELS = isPWA ? 20 : 2;
@@ -61,18 +50,6 @@
             let handshakeSecret = null;
             let pollIntervals = {};
             let failedPolls = {};
-
-            // Показывать отладочную информацию (можно отключить в проде)
-            const DEBUG = true;
-
-            function debug(msg) {
-                console.log('[P2PPong]', msg);
-                if (DEBUG) {
-                    debugDiv.style.display = 'block';
-                    debugDiv.textContent += msg + '\n';
-                    debugDiv.scrollTop = debugDiv.scrollHeight;
-                }
-            }
 
             function generateToken() {
                 return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) +
@@ -85,17 +62,12 @@
                 return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
             }
 
-            // AES-GCM шифрование через Web Crypto
+            // AES-GCM шифрование (как в главном окне)
             async function importAESKey(base64key) {
-                try {
-                    const raw = Uint8Array.from(atob(base64key), c => c.charCodeAt(0));
-                    return await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt",
-                        "decrypt"
-                    ]);
-                } catch (e) {
-                    debug('Ошибка импорта ключа: ' + e.message);
-                    throw e;
-                }
+                const raw = Uint8Array.from(atob(base64key), c => c.charCodeAt(0));
+                return await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt",
+                    "decrypt"
+                ]);
             }
 
             async function aesEncrypt(plaintext, keyBase64) {
@@ -117,7 +89,7 @@
                     const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
                     return new TextDecoder().decode(decrypted);
                 } catch (e) {
-                    debug('Ошибка расшифровки: ' + e.message);
+                    console.error('AES decrypt error:', e.message);
                     return null;
                 }
             }
@@ -131,25 +103,16 @@
                         const options = { method, headers: { 'Content-Type': 'application/json' },
                             signal: ctrl.signal };
                         if (body) options.body = JSON.stringify(body);
-                        const url = RENDER_SERVER + path;
-                        debug(`API: ${method} ${path} (попытка ${attempt + 1}/${retries})`);
-                        const res = await fetch(url, options);
+                        const res = await fetch(RENDER_SERVER + path, options);
                         clearTimeout(to);
-                        if (res.ok) {
-                            const data = await res.json();
-                            debug(`API OK: ${method} ${path}`);
-                            return data;
-                        }
+                        if (res.ok) return await res.json();
                         if (res.status >= 500 && attempt < retries - 1) {
-                            debug(`Сервер вернул ${res.status}, ждём...`);
                             await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
                             continue;
                         }
-                        debug(`Ошибка API: ${res.status} ${res.statusText}`);
                         return null;
                     } catch (e) {
                         clearTimeout(to);
-                        debug(`Сеть/таймаут: ${e.message}`);
                         if (attempt < retries - 1) {
                             await new Promise(r => setTimeout(r, 3000 * (attempt + 1)));
                             continue;
@@ -161,29 +124,23 @@
             }
 
             function sendToParent(msg) {
-                debug(`Отправка родителю: ${msg.type}`);
                 if (window.parent && window.parent !== window) {
                     window.parent.postMessage(msg, '*');
                 }
             }
 
-            // Экспоненциальный поллинг
+            // Поллинг с экспоненциальной задержкой
             function startPolling(sid, secretKeyB64) {
-                if (pollIntervals[sid]) {
-                    debug(`Поллинг для ${sid} уже запущен`);
-                    return;
-                }
+                if (pollIntervals[sid]) return;
                 let lastTime = Date.now();
                 failedPolls[sid] = 0;
-                debug(`Запуск поллинга для ${sid}`);
 
                 const doPoll = async () => {
                     const res = await apiCall('GET', `/message?id=${sid}&since=${lastTime}`);
                     if (res && res.messages) {
                         failedPolls[sid] = 0;
                         for (const m of res.messages) {
-                            let text = m.packet;
-                            const decrypted = await aesDecrypt(text, secretKeyB64);
+                            const decrypted = await aesDecrypt(m.packet, secretKeyB64);
                             if (decrypted) {
                                 try {
                                     const parsed = JSON.parse(decrypted);
@@ -198,7 +155,7 @@
                                         channelId: sid
                                     });
                                 } catch (err) {
-                                    debug('Ошибка парсинга сообщения: ' + err.message);
+                                    console.error('Parse error:', err.message);
                                 }
                             }
                             lastTime = Math.max(lastTime, m.time);
@@ -225,13 +182,11 @@
             async function checkRender(retryCount = 0) {
                 statusDiv.textContent = retryCount === 0 ? '🏹 Будим сервер...' :
                     `🏹 Попытка ${retryCount + 1}...`;
-                debug('Проверка сервера (попытка ' + (retryCount + 1) + ')');
                 const ping = await apiCall('GET', '/ping');
                 if (ping) {
                     handshakeSecret = generateToken();
                     statusDiv.textContent = '✅ Готов (' + Object.keys(channels).length + '/' +
                         MAX_CHANNELS + ')';
-                    debug('Сервер готов, handshake: ' + handshakeSecret.substring(0, 8) + '...');
                     sendToParent({ type: 'pong-ready', handshake: handshakeSecret });
                 } else {
                     const delay = Math.min(3000 * (retryCount + 1), 20000);
@@ -241,7 +196,6 @@
             }
 
             async function createSession() {
-                debug('Создание сессии...');
                 if (!isPWA && Object.keys(channels).length >= 2) {
                     sendToParent({ type: 'error', text: 'Установите приложение для новых чатов.' });
                     sendToParent({ type: 'install-prompt' });
@@ -256,14 +210,11 @@
                 const beaconRes = await apiCall('POST', '/beacon', { tempKey: tempKey });
                 if (!beaconRes || !beaconRes.sessionId) {
                     sendToParent({ type: 'error', text: 'Сервер не отвечает. Попробуйте позже.' });
-                    statusDiv.textContent = '❌ Ошибка создания маяка';
                     return;
                 }
                 const sid = beaconRes.sessionId;
                 const sessionSecret = await sha256(tempKey);
                 channels[sid] = { tempKey, sessionSecret, status: 'waiting', isCreator: true };
-                debug('Маяк создан: ' + sid);
-
                 const link = 'https://stepweather-prog.github.io/ROBINHOOD-P2P/?id=' + sid + '&key=' +
                     tempKey;
                 sendToParent({ type: 'session-created', sessionId: sid, key: tempKey, fullLink: link });
@@ -273,17 +224,12 @@
                 const startTime = Date.now();
                 while (Date.now() - startTime < 90000) {
                     const check = await apiCall('GET', '/beacon?id=' + sid);
-                    if (check && check.matched) {
-                        matched = true;
-                        debug('Получатель найден!');
-                        break;
-                    }
+                    if (check && check.matched) { matched = true; break; }
                     await new Promise(r => setTimeout(r, 4000));
                 }
                 if (!matched) {
                     delete channels[sid];
                     sendToParent({ type: 'error', text: '⏰ Таймаут ожидания. Никто не принял стрелу.' });
-                    statusDiv.textContent = '⏰ Таймаут';
                     return;
                 }
                 channels[sid].status = 'open';
@@ -294,14 +240,10 @@
             }
 
             async function acceptSession(sid, tempKey) {
-                debug(`Принятие сессии: sid=${sid}, key=${tempKey ? tempKey.substring(0, 8) + '...' : 'НЕТ'}`);
-
                 if (!sid || !tempKey) {
-                    debug('ОШИБКА: отсутствует sid или tempKey');
                     sendToParent({ type: 'error', text: 'Неверная ссылка: нет данных сессии.' });
                     return;
                 }
-
                 if (!isPWA && Object.keys(channels).length >= 2) {
                     sendToParent({ type: 'error', text: 'Установите приложение для новых чатов.' });
                     sendToParent({ type: 'install-prompt' });
@@ -311,45 +253,19 @@
                     sendToParent({ type: 'error', text: 'Максимум ' + MAX_CHANNELS + ' колчанов.' });
                     return;
                 }
-
                 statusDiv.textContent = '🔍 Поиск маяка...';
-                debug('Отправка /find с tempKey');
                 const findRes = await apiCall('POST', '/find', { tempKey: tempKey });
-
-                if (!findRes) {
-                    debug('ОШИБКА: /find вернул null');
-                    sendToParent({ type: 'error', text: '🏹 Сервер не отвечает. Попробуйте позже.' });
-                    statusDiv.textContent = '❌ Сервер не отвечает';
+                if (!findRes || findRes.status !== 'matched') {
+                    sendToParent({ type: 'error', text: '🏹 Маяк не найден или истек.' });
                     return;
                 }
-
-                debug(`/find ответ: status=${findRes.status}, sessionId=${findRes.sessionId}`);
-
-                if (findRes.status !== 'matched') {
-                    debug('ОШИБКА: статус не matched');
-                    sendToParent({ type: 'error', text: '🏹 Маяк не найден или срок истёк.' });
-                    statusDiv.textContent = '❌ Маяк не найден';
-                    return;
-                }
-
-                // ВАЖНО: используем правильную переменную
                 const actualSid = findRes.sessionId || sid;
-                debug(`Финальный sessionId: ${actualSid}`);
-
                 const sessionSecret = await sha256(tempKey);
                 channels[actualSid] = { tempKey, sessionSecret, status: 'open', isCreator: false };
-                debug(`Канал создан: ${actualSid}`);
-
                 startPolling(actualSid, sessionSecret);
-
-                // ИСПРАВЛЕНО: actualId -> actualSid
-                sendToParent({
-                    type: 'channel-open',
-                    secret: sessionSecret,
-                    channelId: actualSid,
-                    role: 'receiver'
-                });
-                debug('channel-open отправлен родителю');
+                // ИСПРАВЛЕНО: используем actualSid
+                sendToParent({ type: 'channel-open', secret: sessionSecret, channelId: actualSid,
+                    role: 'receiver' });
                 statusDiv.textContent = '🏹 Колчан открыт (' + Object.keys(channels).length + '/' +
                     MAX_CHANNELS + ')';
             }
@@ -357,37 +273,29 @@
             window.addEventListener('message', async (event) => {
                 const data = event.data;
                 if (!data || !data.action) return;
-                debug(`Получено сообщение от родителя: ${data.action}`);
-
                 if (data.action === 'handshake') {
                     if (data.handshake === handshakeSecret) {
                         handshakeSecret = null;
                         sendToParent({ type: 'handshake-ok' });
-                        debug('Handshake OK');
-                    } else {
-                        debug('Handshake FAILED: неверный секрет');
                     }
                     return;
                 }
-
                 if (data.action === 'send') {
                     const ch = channels[data.channelId];
                     if (!ch || !ch.sessionSecret) {
-                        debug(`ОШИБКА отправки: канал ${data.channelId} не найден`);
                         sendToParent({ type: 'error', text: 'Канал не найден.' });
                         return;
                     }
                     if (data.secret !== ch.sessionSecret) {
-                        debug('ОШИБКА отправки: неверный секрет');
                         sendToParent({ type: 'error', text: 'Неверный секрет колчана.' });
                         return;
                     }
+                    // Шифруем AES-GCM
                     const plaintext = JSON.stringify({ text: data.text, sender: MY_ID, time: Date.now() });
                     const packet = await aesEncrypt(plaintext, ch.sessionSecret);
                     apiCall('POST', '/message', { sessionId: data.channelId, packet: packet });
                     return;
                 }
-
                 switch (data.action) {
                     case 'create':
                         createSession();
@@ -395,12 +303,9 @@
                     case 'accept':
                         acceptSession(data.id, data.key);
                         break;
-                    default:
-                        debug(`Неизвестное действие: ${data.action}`);
                 }
             });
 
-            debug('P2PPong v3.1 инициализирован');
             checkRender();
         })();
     </script>
