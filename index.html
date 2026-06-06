@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>P2PPong v4.1</title>
+    <title>P2PPong v4.2</title>
     <style>
         html,body{margin:0;padding:0;height:100%;background:#121212;color:#eee;font-family:sans-serif}
         body{display:flex;justify-content:center;align-items:center}
@@ -12,7 +12,7 @@
     </style>
 </head>
 <body>
-<div class="container"><h3>🏹 P2PPong v4.1</h3><div id="status">Пробуждение сервера...</div></div>
+<div class="container"><h3>🏹 P2PPong v4.2</h3><div id="status">Пробуждение сервера...</div></div>
 <script>
 (function(){
     const WORKERS_URL = 'https://robincall.stephanclaps-491.workers.dev';
@@ -34,15 +34,15 @@
 
     async function apiCall(serverUrl, method, path, body = null, retries = 3) {
         for(let attempt = 0; attempt < retries; attempt++) {
-            const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 80000);
+            const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 15000);
             try {
                 const options = { method, headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal };
                 if(body) options.body = JSON.stringify(body);
                 const res = await fetch(serverUrl + path, options); clearTimeout(to);
                 if(res.ok) return await res.json();
-                if(res.status >= 500 && attempt < retries - 1) { await new Promise(r => setTimeout(r, 3000 * (attempt + 1))); continue; }
+                if(res.status >= 500 && attempt < retries - 1) { await new Promise(r => setTimeout(r, 2000 * (attempt + 1))); continue; }
                 return null;
-            } catch(e) { clearTimeout(to); if(attempt < retries - 1) { await new Promise(r => setTimeout(r, 3000 * (attempt + 1))); continue; } return null; }
+            } catch(e) { clearTimeout(to); if(attempt < retries - 1) { await new Promise(r => setTimeout(r, 2000 * (attempt + 1))); continue; } return null; }
         }
         return null;
     }
@@ -81,7 +81,6 @@
     function stopPolling(sid) { if(pollIntervals[sid]) { clearTimeout(pollIntervals[sid]); delete pollIntervals[sid]; } delete failedPolls[sid]; }
 
     async function checkServers() {
-        // Проверяем оба сервера
         const renderPing = await apiCall(RENDER_SERVER, 'GET', '/ping');
         const workersPing = await apiCall(WORKERS_URL, 'GET', '/ping');
         if (renderPing || workersPing) {
@@ -140,8 +139,20 @@
     window.addEventListener('message', async (event) => {
         const data = event.data;
         if(!data || !data.action) return;
-        if(data.action === 'handshake') { if(data.handshake === handshakeSecret) { handshakeSecret = null; sendToParent({ type: 'handshake-ok' }); } return; }
+        
+        // Handshake
+        if(data.action === 'handshake') { 
+            if(data.handshake === handshakeSecret) { 
+                handshakeSecret = null; 
+                sendToParent({ type: 'handshake-ok' }); 
+            } 
+            return; 
+        }
+        
+        // Обновляем сервер из сообщения (до всех действий)
         if(data.server) { currentServer = data.server; }
+        
+        // Отправка сообщения
         if(data.action === 'send') {
             const ch = channels[data.channelId];
             if(!ch || !ch.sessionSecret) { sendToParent({ type: 'error', text: 'Канал не найден.' }); return; }
@@ -152,7 +163,16 @@
             apiCall(serverUrl, 'POST', '/message', { sessionId: data.channelId, packet: packet });
             return;
         }
-        switch(data.action) { case 'create': createSession(); break; case 'accept': acceptSession(data.id, data.key, data.server || 'render'); break; }
+        
+        // Создание/принятие канала
+        switch(data.action) {
+            case 'create':
+                createSession();
+                break;
+            case 'accept':
+                acceptSession(data.id, data.key, data.server || currentServer);
+                break;
+        }
     });
 
     checkServers();
