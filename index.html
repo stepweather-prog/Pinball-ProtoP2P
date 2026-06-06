@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>P2PPong v4.0</title>
+    <title>P2PPong v4.1</title>
     <style>
         html,body{margin:0;padding:0;height:100%;background:#121212;color:#eee;font-family:sans-serif}
         body{display:flex;justify-content:center;align-items:center}
@@ -12,7 +12,7 @@
     </style>
 </head>
 <body>
-<div class="container"><h3>🏹 P2PPong v4.0</h3><div id="status">Пробуждение сервера...</div></div>
+<div class="container"><h3>🏹 P2PPong v4.1</h3><div id="status">Пробуждение сервера...</div></div>
 <script>
 (function(){
     const WORKERS_URL = 'https://robincall.stephanclaps-491.workers.dev';
@@ -22,7 +22,7 @@
     const isPWA = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
     const MAX_CHANNELS = isPWA ? 20 : 2;
     let channels = {}, handshakeSecret = null, pollIntervals = {}, failedPolls = {};
-    let currentServer = 'render'; // render или workers
+    let currentServer = 'render';
 
     function generateToken() { return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2)+Math.random().toString(36).substring(2); }
     async function sha256(text) { const data = new TextEncoder().encode(text); const hash = await crypto.subtle.digest('SHA-256', data); return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join(''); }
@@ -32,10 +32,7 @@
     async function aesEncrypt(plaintext, keyHex) { const key = await importAESKey(keyHex); const iv = crypto.getRandomValues(new Uint8Array(12)); const encoded = new TextEncoder().encode(plaintext); const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded); const payload = { iv: btoa(String.fromCharCode(...iv)), data: btoa(String.fromCharCode(...new Uint8Array(ciphertext))) }; return JSON.stringify(payload); }
     async function aesDecrypt(payloadStr, keyHex) { try { const key = await importAESKey(keyHex); const payload = JSON.parse(payloadStr); const iv = Uint8Array.from(atob(payload.iv), c => c.charCodeAt(0)); const data = Uint8Array.from(atob(payload.data), c => c.charCodeAt(0)); const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data); return new TextDecoder().decode(decrypted); } catch(e) { console.error('AES decrypt error:', e.message); return null; } }
 
-    function getServerUrl() { return currentServer === 'workers' ? WORKERS_URL : RENDER_SERVER; }
-
-    async function apiCall(method, path, body = null, retries = 5) {
-        const serverUrl = getServerUrl();
+    async function apiCall(serverUrl, method, path, body = null, retries = 3) {
         for(let attempt = 0; attempt < retries; attempt++) {
             const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 80000);
             try {
@@ -52,12 +49,12 @@
 
     function sendToParent(msg) { if(window.parent && window.parent !== window) { window.parent.postMessage(msg, '*'); } }
 
-    function startPolling(sid, secretKeyHex) {
+    function startPolling(sid, secretKeyHex, server) {
         if(pollIntervals[sid]) return;
         let lastTime = Date.now(); failedPolls[sid] = 0;
+        const serverUrl = server === 'workers' ? WORKERS_URL : RENDER_SERVER;
         const doPoll = async () => {
-            const serverUrl = getServerUrl();
-            const res = await apiCall('GET', '/message?id=' + sid + '&since=' + lastTime);
+            const res = await apiCall(serverUrl, 'GET', '/message?id=' + sid + '&since=' + lastTime);
             if(res && res.messages) {
                 failedPolls[sid] = 0;
                 for(const m of res.messages) {
@@ -71,7 +68,7 @@
                     }
                     lastTime = Math.max(lastTime, m.time);
                 }
-                pollIntervals[sid] = setTimeout(doPoll, currentServer === 'workers' ? 1000 : 2000);
+                pollIntervals[sid] = setTimeout(doPoll, server === 'workers' ? 1000 : 2000);
             } else {
                 failedPolls[sid]++;
                 const delay = Math.min(2000 * Math.pow(1.5, failedPolls[sid]), 30000);
@@ -83,56 +80,59 @@
 
     function stopPolling(sid) { if(pollIntervals[sid]) { clearTimeout(pollIntervals[sid]); delete pollIntervals[sid]; } delete failedPolls[sid]; }
 
-    async function checkRender(retryCount = 0) {
-        statusDiv.textContent = retryCount === 0 ? '🏹 Будим сервер...' : '🏹 Попытка ' + (retryCount + 1) + '...';
-        const ping = await apiCall('GET', '/ping');
-        if(ping) {
+    async function checkServers() {
+        // Проверяем оба сервера
+        const renderPing = await apiCall(RENDER_SERVER, 'GET', '/ping');
+        const workersPing = await apiCall(WORKERS_URL, 'GET', '/ping');
+        if (renderPing || workersPing) {
             handshakeSecret = generateToken();
-            statusDiv.textContent = '✅ Готов (' + Object.keys(channels).length + '/' + MAX_CHANNELS + ') [' + currentServer + ']';
+            statusDiv.textContent = '✅ Готов (' + Object.keys(channels).length + '/' + MAX_CHANNELS + ')';
             sendToParent({ type: 'pong-ready', handshake: handshakeSecret });
         } else {
-            const delay = Math.min(3000 * (retryCount + 1), 20000);
-            statusDiv.textContent = '⏳ Сервер спит. Ещё попытка через ' + delay/1000 + 'с...';
-            setTimeout(() => checkRender(retryCount + 1), delay);
+            statusDiv.textContent = '⏳ Серверы спят. Пробуем...';
+            setTimeout(checkServers, 5000);
         }
     }
 
     async function createSession() {
         if(!isPWA && Object.keys(channels).length >= 2) { sendToParent({ type: 'error', text: 'Установите приложение для новых чатов.' }); sendToParent({ type: 'install-prompt' }); return; }
         if(Object.keys(channels).length >= MAX_CHANNELS) { sendToParent({ type: 'error', text: 'Максимум ' + MAX_CHANNELS + ' колчанов.' }); return; }
-        statusDiv.textContent = '⚒ Создание маяка [' + currentServer + ']...';
+        const server = currentServer;
+        const serverUrl = server === 'workers' ? WORKERS_URL : RENDER_SERVER;
+        statusDiv.textContent = '⚒ Создание маяка [' + server + ']...';
         const tempKey = generateToken();
-        const beaconRes = await apiCall('POST', '/beacon', { tempKey: tempKey });
+        const beaconRes = await apiCall(serverUrl, 'POST', '/beacon', { tempKey: tempKey });
         if(!beaconRes || !beaconRes.sessionId) { sendToParent({ type: 'error', text: 'Сервер не отвечает. Попробуйте позже.' }); return; }
         const sid = beaconRes.sessionId;
         const sessionSecret = await sha256(tempKey);
-        channels[sid] = { tempKey, sessionSecret, status: 'waiting', isCreator: true, server: currentServer };
-        const link = 'https://stepweather-prog.github.io/ROBINHOOD-P2P/?id=' + sid + '&key=' + tempKey + '&server=' + currentServer;
+        channels[sid] = { tempKey, sessionSecret, status: 'waiting', isCreator: true, server: server };
+        const link = 'https://stepweather-prog.github.io/ROBINHOOD-P2P/?id=' + sid + '&key=' + tempKey + '&server=' + server;
         sendToParent({ type: 'session-created', sessionId: sid, key: tempKey, fullLink: link });
-        sendToParent({ type: 'status', text: '📨 Ожидаю получателя (90 сек) [' + currentServer + ']...' });
+        sendToParent({ type: 'status', text: '📨 Ожидаю получателя (90 сек) [' + server + ']...' });
         let matched = false; const startTime = Date.now();
         while(Date.now() - startTime < 90000) {
-            const check = await apiCall('GET', '/beacon?id=' + sid);
+            const check = await apiCall(serverUrl, 'GET', '/beacon?id=' + sid);
             if(check && check.matched) { matched = true; break; }
             await new Promise(r => setTimeout(r, 4000));
         }
         if(!matched) { delete channels[sid]; sendToParent({ type: 'error', text: '⏰ Таймаут ожидания. Никто не принял стрелу.' }); return; }
-        channels[sid].status = 'open'; startPolling(sid, sessionSecret);
+        channels[sid].status = 'open'; startPolling(sid, sessionSecret, server);
         sendToParent({ type: 'channel-open', secret: sessionSecret, channelId: sid, role: 'creator' });
         statusDiv.textContent = '🏹 Колчан открыт (' + Object.keys(channels).length + '/' + MAX_CHANNELS + ')';
     }
 
-    async function acceptSession(sid, tempKey) {
+    async function acceptSession(sid, tempKey, server) {
         if(!sid || !tempKey) { sendToParent({ type: 'error', text: 'Неверная ссылка: нет данных сессии.' }); return; }
         if(!isPWA && Object.keys(channels).length >= 2) { sendToParent({ type: 'error', text: 'Установите приложение для новых чатов.' }); sendToParent({ type: 'install-prompt' }); return; }
         if(Object.keys(channels).length >= MAX_CHANNELS) { sendToParent({ type: 'error', text: 'Максимум ' + MAX_CHANNELS + ' колчанов.' }); return; }
-        statusDiv.textContent = '🔍 Поиск маяка [' + currentServer + ']...';
-        const findRes = await apiCall('POST', '/find', { tempKey: tempKey });
+        const serverUrl = server === 'workers' ? WORKERS_URL : RENDER_SERVER;
+        statusDiv.textContent = '🔍 Поиск маяка [' + server + ']...';
+        const findRes = await apiCall(serverUrl, 'POST', '/find', { tempKey: tempKey });
         if(!findRes || findRes.status !== 'matched') { sendToParent({ type: 'error', text: '🏹 Маяк не найден или истек.' }); return; }
         const actualSid = findRes.sessionId || sid;
         const sessionSecret = await sha256(tempKey);
-        channels[actualSid] = { tempKey, sessionSecret, status: 'open', isCreator: false, server: currentServer };
-        startPolling(actualSid, sessionSecret);
+        channels[actualSid] = { tempKey, sessionSecret, status: 'open', isCreator: false, server: server };
+        startPolling(actualSid, sessionSecret, server);
         sendToParent({ type: 'channel-open', secret: sessionSecret, channelId: actualSid, role: 'receiver' });
         statusDiv.textContent = '🏹 Колчан открыт (' + Object.keys(channels).length + '/' + MAX_CHANNELS + ')';
     }
@@ -148,13 +148,14 @@
             if(data.secret !== ch.sessionSecret) { sendToParent({ type: 'error', text: 'Неверный секрет колчана.' }); return; }
             const plaintext = JSON.stringify({ text: data.text, sender: MY_ID, time: Date.now() });
             const packet = await aesEncrypt(plaintext, ch.sessionSecret);
-            apiCall('POST', '/message', { sessionId: data.channelId, packet: packet });
+            const serverUrl = ch.server === 'workers' ? WORKERS_URL : RENDER_SERVER;
+            apiCall(serverUrl, 'POST', '/message', { sessionId: data.channelId, packet: packet });
             return;
         }
-        switch(data.action) { case 'create': createSession(); break; case 'accept': acceptSession(data.id, data.key); break; }
+        switch(data.action) { case 'create': createSession(); break; case 'accept': acceptSession(data.id, data.key, data.server || 'render'); break; }
     });
 
-    checkRender();
+    checkServers();
 })();
 </script>
 </body>
