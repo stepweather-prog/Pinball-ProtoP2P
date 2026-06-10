@@ -142,6 +142,7 @@ function switchServer(server){
 }
 
 function generateToken(){return crypto.randomUUID?crypto.randomUUID():Math.random().toString(36).substring(2)+Math.random().toString(36).substring(2)}
+async function sha256(text){const data=new TextEncoder().encode(text);const hash=await crypto.subtle.digest('SHA-256',data);return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,'0')).join('')}
 
 function sendToParent(msg){if(window.parent&&window.parent!==window)try{window.parent.postMessage(msg,'*')}catch(e){}}
 
@@ -168,16 +169,19 @@ async function getPongStorageKey(){let kb=localStorage.getItem(PONG_SECURE_KEY);
 async function saveSessions(){try{const s=Object.entries(channels).filter(([_,c])=>c.status==='open').map(([id,c])=>({id,key:c.tempKey,secret:c.sessionSecret,creator:c.isCreator,createdAt:c.createdAt}));if(!s.length){localStorage.removeItem(PONG_SESSIONS_KEY);return}const sk=await getPongStorageKey();const iv=crypto.getRandomValues(new Uint8Array(12));const enc=new TextEncoder().encode(JSON.stringify(s));const ct=await crypto.subtle.encrypt({name:"AES-GCM",iv},sk,enc);const combined=new Uint8Array(iv.length+new Uint8Array(ct).length);combined.set(iv);combined.set(new Uint8Array(ct),iv.length);localStorage.setItem(PONG_SESSIONS_KEY,btoa(String.fromCharCode(...combined)))}catch(e){}}
 async function restoreSessions(){try{const stored=localStorage.getItem(PONG_SESSIONS_KEY);if(!stored)return;const sk=await getPongStorageKey();const combined=Uint8Array.from(atob(stored),c=>c.charCodeAt(0));const iv=combined.slice(0,12);const ct=combined.slice(12);const dec=await crypto.subtle.decrypt({name:"AES-GCM",iv},sk,ct);const sessions=JSON.parse(new TextDecoder().decode(dec));const now=Date.now(),restored=[];for(const sc of sessions){if(now-sc.createdAt>7*24*60*60*1000)continue;const check=await apiCall('GET','/beacon?id='+sc.id);if(check&&check.matched){channels[sc.id]={tempKey:sc.key,sessionSecret:sc.secret,status:'open',isCreator:sc.creator,createdAt:sc.createdAt};startPolling(sc.id);restored.push({channelId:sc.id,secret:sc.secret,role:sc.creator?'creator':'receiver'})}}if(restored.length>0)sendToParent({type:'restored-channels',channels:restored});updateUI()}catch(e){}}
 
-async function createSession(){
+// ========== СОЗДАНИЕ СЕССИИ (tempKey от клиента) ==========
+async function createSession(clientTempKey){
     const count=Object.keys(channels).length,max=getMax();
     if(count>=max){sendToParent({type:'error',text:isPWA?'Максимум '+max+' каналов.':'Максимум '+max+' каналов. Установите PWA для 20.'});if(!isPWA)sendToParent({type:'install-prompt'});return}
-    const tempKey=generateToken(),beaconRes=await apiCall('POST','/beacon',{tempKey});
+    const tempKey=clientTempKey||generateToken();
+    const tempKeyHash=await sha256(tempKey);
+    const beaconRes=await apiCall('POST','/beacon',{tempKeyHash});
     if(!beaconRes||!beaconRes.sessionId){sendToParent({type:'error',text:'Сервер не отвечает. Попробуйте переключить.'});return}
     const sid=beaconRes.sessionId,sessionSecret=await sha256(tempKey);
     channels[sid]={tempKey,sessionSecret,status:'waiting',isCreator:true,createdAt:Date.now()};
-    const link=APP_BASE_URL+'?id='+sid+'&key='+tempKey+'&server='+currentServer;
+    const link=APP_BASE_URL+'?id='+sid+'&server='+currentServer+'#key='+tempKey;
     sendToParent({type:'session-created',sessionId:sid,key:tempKey,fullLink:link});
-    log('Маяк: '+sid.substring(0,8)+'... → '+APP_BASE_URL+' [сервер: '+currentServer+']','success');
+    log('Маяк: '+sid.substring(0,8)+'...','success');
     updateUI();
     let matched=false;const start=Date.now();
     while(Date.now()-start<90000){const check=await apiCall('GET','/beacon?id='+sid);if(check&&check.matched){matched=true;break}await new Promise(r=>setTimeout(r,5000))}
@@ -186,6 +190,7 @@ async function createSession(){
     sendToParent({type:'channel-open',secret:sessionSecret,channelId:sid,role:'creator'});
     log('Канал открыт!','success');setMsg('✅ Колчан открыт!');updateUI();
 }
+
 async function acceptSession(sid,tempKey){
     const count=Object.keys(channels).length;
     if(count>=getMax()){sendToParent({type:'error',text:'Максимум каналов'});if(!isPWA)sendToParent({type:'install-prompt'});return}
@@ -200,8 +205,6 @@ async function acceptSession(sid,tempKey){
     sendToParent({type:'channel-open',secret:sessionSecret,channelId:actualSid,role:'receiver'});
     log('Подключено!','success');setMsg('✅ Подключено!');updateUI();
 }
-
-async function sha256(text){const data=new TextEncoder().encode(text);const hash=await crypto.subtle.digest('SHA-256',data);return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,'0')).join('')}
 
 serverRender.addEventListener('click',()=>switchServer('render'));
 serverWorkers.addEventListener('click',()=>switchServer('workers'));
@@ -218,7 +221,7 @@ window.addEventListener('message',(event)=>{
     if(data.action==='handshake'){if(data.handshake===handshakeSecret){handshakeSecret=null;sendToParent({type:'handshake-ok'});log('Handshake OK','success')}return}
     if(data.action==='send'){const ch=channels[data.channelId];if(!ch||!ch.sessionSecret){sendToParent({type:'error',text:'Канал не найден'});return}if(data.secret!==ch.sessionSecret){sendToParent({type:'error',text:'Неверный секрет'});return}const packet=JSON.stringify({text:data.text,sender:MY_ID,time:Date.now()});apiCall('POST','/message',{sessionId:data.channelId,packet});return}
     if(data.server&&data.server!==currentServer){switchServer(data.server);return}
-    switch(data.action){case'create':createSession();break;case'accept':if(data.id)acceptSession(data.id,data.key||'');break;case'cancel-create':setMsg('🏹 Готов');break}
+    switch(data.action){case'create':createSession(data.tempKey);break;case'accept':if(data.id)acceptSession(data.id,data.key||'');break;case'cancel-create':setMsg('🏹 Готов');break}
 });
 
 window.addEventListener('beforeunload',()=>{if(Object.keys(channels).length>0)saveSessions();stopAllPolling()});
