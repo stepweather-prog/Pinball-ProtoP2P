@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>P2PPong v4.0.2</title>
+    <title>P2PPong v4.0.3</title>
     <link rel="icon" type="image/png" sizes="192x192" href="https://stepweather-prog.github.io/ROBINHOOD-P2P/assets/avatars/001-.png">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://p2ppong.onrender.com https://robincall.stephanclaps-491.workers.dev; img-src 'self' data: https://stepweather-prog.github.io;">
     <style>
@@ -35,7 +35,7 @@
 </head>
 <body>
 <div class="container">
-    <h2>🏹 P2PPong v4.0.2</h2>
+    <h2>🏹 P2PPong v4.0.3</h2>
     <div class="status-row">
         <span class="status-dot checking" id="status-dot"></span>
         <span id="status-text">Проверка...</span>
@@ -73,6 +73,7 @@
     let handshakeSecret = null;
     let pollIntervals = {};
     let serverStatuses = { render: 'checking', workers: 'checking' };
+    let isCreatingSession = false; // Флаг для блокировки авто-переключения
     
     const parentOrigin = document.referrer || '';
     const isRobinCall = parentOrigin.includes('ROBINHOOD-P2PCall');
@@ -124,9 +125,51 @@
         return null;
     }
 
-    async function checkServer(server) { const prev = currentServer; if (server) currentServer = server; const ping = await apiCall('GET', '/ping'); serverStatuses[currentServer] = ping ? 'online' : 'offline'; if (server) currentServer = prev; updateUI(); if (ping && !handshakeSecret) { handshakeSecret = generateToken(); sendToParent({ type: 'pong-ready', handshake: handshakeSecret }); log('Handshake отправлен', 'success'); } return ping !== null; }
-    async function checkAllServers() { await Promise.all([checkServer('render'), checkServer('workers')]); if (serverStatuses[currentServer] === 'offline') { const other = currentServer === 'render' ? 'workers' : 'render'; if (serverStatuses[other] === 'online') switchServer(other); } updateUI(); }
-    function switchServer(server) { if (server === currentServer) return; log('Переключение на ' + (server === 'workers' ? 'Workers' : 'Render'), 'info'); currentServer = server; try { localStorage.setItem('robinhood_server', currentServer); } catch (e) {} stopAllPolling(); handshakeSecret = null; sendToParent({ type: 'server-switched', server: currentServer }); checkServer().then(() => { if (serverStatuses[currentServer] === 'online') { handshakeSecret = generateToken(); sendToParent({ type: 'pong-ready', handshake: handshakeSecret }); restoreSessions(); } }); updateUI(); }
+    async function checkServer(server) { 
+        const prev = currentServer; 
+        if (server) currentServer = server; 
+        const ping = await apiCall('GET', '/ping'); 
+        serverStatuses[currentServer] = ping ? 'online' : 'offline'; 
+        if (server) currentServer = prev; 
+        updateUI(); 
+        if (ping && !handshakeSecret) { 
+            handshakeSecret = generateToken(); 
+            sendToParent({ type: 'pong-ready', handshake: handshakeSecret }); 
+            log('Handshake отправлен', 'success'); 
+        } 
+        return ping !== null; 
+    }
+    
+    async function checkAllServers() { 
+        // НЕ переключаем сервер, если идёт создание сессии
+        if (isCreatingSession) return;
+        await Promise.all([checkServer('render'), checkServer('workers')]); 
+        if (serverStatuses[currentServer] === 'offline') { 
+            const other = currentServer === 'render' ? 'workers' : 'render'; 
+            if (serverStatuses[other] === 'online') switchServer(other); 
+        } 
+        updateUI(); 
+    }
+    
+    function switchServer(server) { 
+        if (server === currentServer) return; 
+        // НЕ переключаем во время создания сессии
+        if (isCreatingSession) { log('Переключение заблокировано: идёт создание сессии', 'info'); return; }
+        log('Переключение на ' + (server === 'workers' ? 'Workers' : 'Render'), 'info'); 
+        currentServer = server; 
+        try { localStorage.setItem('robinhood_server', currentServer); } catch (e) {} 
+        stopAllPolling(); 
+        handshakeSecret = null; 
+        sendToParent({ type: 'server-switched', server: currentServer }); 
+        checkServer().then(() => { 
+            if (serverStatuses[currentServer] === 'online') { 
+                handshakeSecret = generateToken(); 
+                sendToParent({ type: 'pong-ready', handshake: handshakeSecret }); 
+                restoreSessions(); 
+            } 
+        }); 
+        updateUI(); 
+    }
     function generateToken() { return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2); }
     async function sha256(text) { const data = new TextEncoder().encode(text); const hash = await crypto.subtle.digest('SHA-256', data); return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join(''); }
 
@@ -135,43 +178,54 @@
     function stopAllPolling() { Object.keys(pollIntervals).forEach(stopPolling); }
 
     async function getPongStorageKey() { let kb = localStorage.getItem(PONG_SECURE_KEY); if (!kb) { const k = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]); const r = await crypto.subtle.exportKey("raw", k); kb = btoa(String.fromCharCode(...new Uint8Array(r))); localStorage.setItem(PONG_SECURE_KEY, kb); return k; } const r = Uint8Array.from(atob(kb), c => c.charCodeAt(0)); return await crypto.subtle.importKey("raw", r, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]); }
-    async function saveSessions() { try { const s = Object.entries(channels).filter(([_, c]) => c.status === 'open').map(([id, c]) => ({ id, key: c.tempKey, secret: c.sessionSecret, creator: c.isCreator, createdAt: c.createdAt })); if (!s.length) { localStorage.removeItem(PONG_SESSIONS_KEY); return; } const sk = await getPongStorageKey(); const iv = crypto.getRandomValues(new Uint8Array(12)); const enc = new TextEncoder().encode(JSON.stringify(s)); const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, sk, enc); const combined = new Uint8Array(iv.length + new Uint8Array(ct).length); combined.set(iv); combined.set(new Uint8Array(ct), iv.length); localStorage.setItem(PONG_SESSIONS_KEY, btoa(String.fromCharCode(...combined))); } catch (e) {} }
-    async function restoreSessions() { try { const stored = localStorage.getItem(PONG_SESSIONS_KEY); if (!stored) return; const sk = await getPongStorageKey(); const combined = Uint8Array.from(atob(stored), c => c.charCodeAt(0)); const iv = combined.slice(0, 12); const ct = combined.slice(12); const dec = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, sk, ct); const sessions = JSON.parse(new TextDecoder().decode(dec)); const now = Date.now(), restored = []; for (const sc of sessions) { if (now - sc.createdAt > 7 * 24 * 60 * 60 * 1000) continue; const check = await apiCall('GET', '/beacon?id=' + sc.id); if (check && check.matched) { channels[sc.id] = { tempKey: sc.key, sessionSecret: sc.secret, status: 'open', isCreator: sc.creator, createdAt: sc.createdAt }; startPolling(sc.id); restored.push({ channelId: sc.id, secret: sc.secret, role: sc.creator ? 'creator' : 'receiver' }); } } if (restored.length > 0) sendToParent({ type: 'restored-channels', channels: restored }); updateUI(); } catch (e) { log('Ошибка восстановления', 'error'); } }
+    async function saveSessions() { try { const s = Object.entries(channels).filter(([_, c]) => c.status === 'open').map(([id, c]) => ({ id, key: c.tempKey, secret: c.sessionSecret, creator: c.isCreator, createdAt: c.createdAt, server: c.server || currentServer })); if (!s.length) { localStorage.removeItem(PONG_SESSIONS_KEY); return; } const sk = await getPongStorageKey(); const iv = crypto.getRandomValues(new Uint8Array(12)); const enc = new TextEncoder().encode(JSON.stringify(s)); const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, sk, enc); const combined = new Uint8Array(iv.length + new Uint8Array(ct).length); combined.set(iv); combined.set(new Uint8Array(ct), iv.length); localStorage.setItem(PONG_SESSIONS_KEY, btoa(String.fromCharCode(...combined))); } catch (e) {} }
+    async function restoreSessions() { try { const stored = localStorage.getItem(PONG_SESSIONS_KEY); if (!stored) return; const sk = await getPongStorageKey(); const combined = Uint8Array.from(atob(stored), c => c.charCodeAt(0)); const iv = combined.slice(0, 12); const ct = combined.slice(12); const dec = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, sk, ct); const sessions = JSON.parse(new TextDecoder().decode(dec)); const now = Date.now(), restored = []; for (const sc of sessions) { if (now - sc.createdAt > 7 * 24 * 60 * 60 * 1000) continue; const check = await apiCall('GET', '/beacon?id=' + sc.id); if (check && check.matched) { channels[sc.id] = { tempKey: sc.key, sessionSecret: sc.secret, status: 'open', isCreator: sc.creator, createdAt: sc.createdAt, server: sc.server || currentServer }; startPolling(sc.id); restored.push({ channelId: sc.id, secret: sc.secret, role: sc.creator ? 'creator' : 'receiver' }); } } if (restored.length > 0) sendToParent({ type: 'restored-channels', channels: restored }); updateUI(); } catch (e) { log('Ошибка восстановления', 'error'); } }
 
-    // ===== ИСПРАВЛЕНИЕ: Render ожидает tempKey, Workers ожидает tempKeyHash =====
+    // ===== ИСПРАВЛЕНИЕ: БЛОКИРОВКА АВТО-ПЕРЕКЛЮЧЕНИЯ =====
     async function createSession(clientTempKey) { 
         const count = Object.keys(channels).length; 
         if (count >= MAX_CH) { sendToParent({ type: 'error', text: 'Максимум ' + MAX_CH + ' каналов' }); if (!isPWA) sendToParent({ type: 'install-prompt' }); return; } 
+        
+        isCreatingSession = true; // БЛОКИРУЕМ авто-переключение
         const tempKey = clientTempKey || generateToken(); 
         const tempKeyHash = await sha256(tempKey);
+        const serverUsed = currentServer; // Запоминаем сервер
         
-        // Пробуем Render с tempKey, Workers с tempKeyHash
         const body = currentServer === 'workers' ? { tempKeyHash } : { tempKey: tempKey, tempKeyHash };
         log('Создание маяка [' + currentServer + ']...', 'info'); 
         const beaconRes = await apiCall('POST', '/beacon', body); 
+        
         if (!beaconRes || !beaconRes.sessionId) { 
+            // Пробуем другой сервер только если текущий офлайн
             const other = currentServer === 'render' ? 'workers' : 'render';
-            if (serverStatuses[other] === 'online') { 
-                log('Пробую ' + other + '...', 'info'); 
-                const prev = currentServer; currentServer = other;
+            if (serverStatuses[other] === 'online' && serverStatuses[currentServer] === 'offline') { 
+                log('Сервер офлайн, пробую ' + other + '...', 'info'); 
+                currentServer = other;
                 const altBody = other === 'workers' ? { tempKeyHash } : { tempKey: tempKey, tempKeyHash };
                 const altRes = await apiCall('POST', '/beacon', altBody); 
-                currentServer = prev;
-                if (altRes && altRes.sessionId) { processBeacon(altRes, tempKey); return; }
+                if (altRes && altRes.sessionId) { 
+                    processBeacon(altRes, tempKey, other); 
+                    isCreatingSession = false; 
+                    return; 
+                }
+                currentServer = serverUsed; // Возвращаем
             }
-            sendToParent({ type: 'error', text: 'Сервер не отвечает' }); return; 
+            isCreatingSession = false;
+            sendToParent({ type: 'error', text: 'Сервер не отвечает' }); 
+            return; 
         } 
-        processBeacon(beaconRes, tempKey);
+        processBeacon(beaconRes, tempKey, serverUsed);
     }
 
-    function processBeacon(beaconRes, tempKey) {
+    function processBeacon(beaconRes, tempKey, serverUsed) {
         const sid = beaconRes.sessionId;
         sha256(tempKey).then(sessionSecret => {
-            channels[sid] = { tempKey, sessionSecret, status: 'waiting', isCreator: true, createdAt: Date.now() }; 
-            const link = APP_BASE_URL + '?id=' + sid + '&server=' + currentServer + '#key=' + tempKey; 
+            channels[sid] = { tempKey, sessionSecret, status: 'waiting', isCreator: true, createdAt: Date.now(), server: serverUsed }; 
+            const link = APP_BASE_URL + '?id=' + sid + '&server=' + serverUsed + '#key=' + tempKey; 
             sendToParent({ type: 'session-created', sessionId: sid, key: tempKey, fullLink: link }); 
-            log('Маяк: ' + sid.substring(0, 8) + '...', 'success'); 
+            log('Маяк: ' + sid.substring(0, 8) + '... [' + serverUsed + ']', 'success'); 
             updateUI(); 
+            isCreatingSession = false; // РАЗБЛОКИРУЕМ
             waitForMatch(sid);
         });
     }
@@ -186,19 +240,20 @@
         if (!matched) { delete channels[sid]; saveSessions(); sendToParent({ type: 'error', text: 'Таймаут ожидания' }); updateUI(); return; } 
         channels[sid].status = 'open'; startPolling(sid); saveSessions(); 
         sendToParent({ type: 'channel-open', secret: channels[sid].sessionSecret, channelId: sid, role: 'creator' }); 
-        log('Канал открыт!', 'success'); updateUI(); 
+        log('Канал открыт! [' + (channels[sid].server || '?') + ']', 'success'); updateUI(); 
     }
 
     async function acceptSession(sid, tempKey) { 
         if (Object.keys(channels).length >= MAX_CH) { sendToParent({ type: 'error', text: 'Максимум каналов' }); if (!isPWA) sendToParent({ type: 'install-prompt' }); return; } 
         if (channels[sid]) { sendToParent({ type: 'channel-open', secret: channels[sid].sessionSecret, channelId: sid, role: 'receiver' }); return; }
-        log('Поиск маяка: ' + sid.substring(0, 8) + '...', 'info'); 
+        log('Поиск маяка: ' + sid.substring(0, 8) + '... [' + currentServer + ']', 'info'); 
         const findKey = tempKey || generateToken(); 
         const body = currentServer === 'workers' ? { tempKeyHash: await sha256(findKey) } : { tempKey: findKey };
         const findRes = await apiCall('POST', '/find', body); 
         if (!findRes || findRes.status !== 'matched') { 
             const other = currentServer === 'render' ? 'workers' : 'render';
             if (serverStatuses[other] === 'online') { 
+                log('Пробую ' + other + '...', 'info'); 
                 const prev = currentServer; currentServer = other;
                 const altBody = other === 'workers' ? { tempKeyHash: await sha256(findKey) } : { tempKey: findKey };
                 const altRes = await apiCall('POST', '/find', altBody); currentServer = prev;
@@ -209,20 +264,17 @@
         completeAccept(findRes, sid, findKey);
     }
     async function completeAccept(findRes, sid, findKey) {
-    const actualSid = findRes.sessionId || sid;
-    const sessionSecret = await sha256(findKey); 
-    // Используем ОБА ID для совместимости
-    channels[actualSid] = { tempKey: findKey, sessionSecret, status: 'open', isCreator: false, createdAt: Date.now() };
-    if (actualSid !== sid) {
-        channels[sid] = { tempKey: findKey, sessionSecret, status: 'open', isCreator: false, createdAt: Date.now() };
+        const actualSid = findRes.sessionId || sid;
+        const sessionSecret = await sha256(findKey); 
+        channels[actualSid] = { tempKey: findKey, sessionSecret, status: 'open', isCreator: false, createdAt: Date.now(), server: currentServer };
+        if (actualSid !== sid) {
+            channels[sid] = { tempKey: findKey, sessionSecret, status: 'open', isCreator: false, createdAt: Date.now(), server: currentServer };
+            startPolling(sid);
+        }
+        startPolling(actualSid); saveSessions(); 
+        sendToParent({ type: 'channel-open', secret: sessionSecret, channelId: actualSid, role: 'receiver' }); 
+        log('Подключено! [' + currentServer + ']', 'success'); updateUI(); 
     }
-    startPolling(actualSid); 
-    if (actualSid !== sid) startPolling(sid);
-    saveSessions(); 
-    sendToParent({ type: 'channel-open', secret: sessionSecret, channelId: actualSid, role: 'receiver' }); 
-    log('Подключено! [sid=' + sid.substring(0,8) + ' actual=' + actualSid.substring(0,8) + ']', 'success'); 
-    updateUI(); 
-}
 
     window.addEventListener('message', (event) => {
         let origin; try { origin = new URL(event.origin).hostname; } catch (e) { return; }
@@ -240,14 +292,14 @@
     $('card-render').addEventListener('click', () => switchServer('render'));
     $('card-workers').addEventListener('click', () => switchServer('workers'));
     $('btn-refresh').addEventListener('click', checkAllServers);
-    document.addEventListener('visibilitychange', () => { if (document.hidden) { Object.keys(pollIntervals).forEach(stopPolling); } else { Object.keys(channels).forEach(sid => { if (channels[sid].status === 'open') startPolling(sid); }); checkAllServers(); } });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) { Object.keys(pollIntervals).forEach(stopPolling); } else { Object.keys(channels).forEach(sid => { if (channels[sid].status === 'open') startPolling(sid); }); if (!isCreatingSession) checkAllServers(); } });
     window.addEventListener('beforeunload', () => { if (Object.keys(channels).length > 0) saveSessions(); stopAllPolling(); });
 
     async function init() { 
         const saved = localStorage.getItem('robinhood_server'); 
         if (saved && (saved === 'render' || saved === 'workers')) currentServer = saved; 
         updateUI(); await checkAllServers(); await restoreSessions(); 
-        log('P2PPong v4.0.2 готов [' + (isRobinCall ? 'Call' : 'P2P') + ']', 'success'); 
+        log('P2PPong v4.0.3 готов [' + (isRobinCall ? 'Call' : 'P2P') + ']', 'success'); 
     }
     init();
 })();
