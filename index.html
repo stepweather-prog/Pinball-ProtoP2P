@@ -1,128 +1,106 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>P2PPong v5.0</title>
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' https://p2ppong-v2.onrender.com https://robincall.stephanclaps-491.workers.dev https://* wss://*;">
-    <style>
-        :root { --bg: #0d1a0c; --bg2: #1a2a1f; --accent: #c4a24b; --accent2: #e8d5a3; --text: #e8e2c7; --dim: #b8a87a; --border: #c4a24b; --green: #4caf50; --red: #f44336; --orange: #ff9800; --blue: #4bc4d0; }
-        * { margin:0; padding:0; box-sizing:border-box; }
-        body { background:linear-gradient(135deg,var(--bg),var(--bg2)); color:var(--text); font-family:'Segoe UI','Inter',sans-serif; display:flex; align-items:center; justify-content:center; min-height:100vh; padding:20px; }
-        .container { width:100%; max-width:500px; background:rgba(20,30,18,0.95); border:2px solid var(--border); border-radius:20px; padding:24px; box-shadow:0 8px 32px rgba(0,0,0,0.5); }
-        h2 { text-align:center; background:linear-gradient(135deg,var(--accent2),var(--accent)); -webkit-background-clip:text; background-clip:text; color:transparent; margin-bottom:20px; }
-        .status-row { display:flex; align-items:center; gap:8px; justify-content:center; margin-bottom:16px; flex-wrap:wrap; }
-        .status-dot { width:10px; height:10px; border-radius:50%; }
-        .status-dot.online { background:var(--green); box-shadow:0 0 8px var(--green); }
-        .status-dot.offline { background:var(--red); }
-        .status-dot.checking { background:var(--orange); animation:pulse 1s infinite; }
-        .status-dot.mesh { background:var(--blue); box-shadow:0 0 8px var(--blue); }
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-        .server-cards { display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
-        .server-card { flex:1; min-width:90px; padding:12px; border-radius:12px; border:1px solid var(--border); text-align:center; cursor:pointer; transition:0.2s; background:rgba(255,255,255,0.03); }
-        .server-card:hover { background:rgba(196,162,75,0.15); }
-        .server-card.active { border-color:var(--green); background:rgba(76,175,80,0.1); }
-        .server-card.mesh-active { border-color:var(--blue); background:rgba(75,196,208,0.1); }
-        .server-name { font-weight:bold; font-size:0.9em; color:var(--accent2); }
-        .server-status { font-size:0.65em; color:var(--dim); margin-top:4px; }
-        .log-box { background:rgba(0,0,0,0.4); border-radius:10px; padding:10px; max-height:200px; overflow-y:auto; font-family:monospace; font-size:0.6em; color:var(--dim); margin-top:12px; }
-        .log-entry { margin:3px 0; } .log-entry.success { color:var(--green); } .log-entry.error { color:var(--red); } .log-entry.info { color:var(--accent2); } .log-entry.mesh { color:var(--blue); }
-        .stats-row { display:flex; justify-content:space-between; font-size:0.6em; color:var(--dim); margin-top:12px; flex-wrap:wrap; gap:4px; }
-        button { width:100%; padding:12px; border-radius:10px; border:1px solid var(--border); background:rgba(196,162,75,0.1); color:var(--text); cursor:pointer; font-weight:bold; font-size:0.9em; transition:0.2s; margin-top:8px; }
-        button:hover { background:rgba(196,162,75,0.25); }
-        .badge { display:inline-block; padding:2px 8px; border-radius:10px; font-size:0.7em; font-weight:bold; }
-        .badge-pwa { background:rgba(76,175,80,0.2); color:var(--green); } .badge-browser { background:rgba(255,152,0,0.2); color:var(--orange); } .badge-mesh { background:rgba(75,196,208,0.2); color:var(--blue); }
-    </style>
-</head>
-<body>
-<div class="container">
-    <h2>🏹 P2PPong v5.0</h2>
-    <div class="status-row">
-        <span class="status-dot checking" id="status-dot"></span>
-        <span id="status-text">Проверка...</span>
-        <span class="badge" id="pwa-badge">Браузер</span>
-        <span class="badge badge-mesh" id="mesh-badge" style="display:none;">Mesh</span>
-    </div>
-    <div class="server-cards">
-        <div class="server-card active" id="card-render"><div class="server-name">🌐 Render</div><div class="server-status" id="render-status">🟡 Проверка...</div></div>
-        <div class="server-card" id="card-workers"><div class="server-name">⚡ Workers</div><div class="server-status" id="workers-status">🟡 Проверка...</div></div>
-        <div class="server-card" id="card-mesh"><div class="server-name">📡 Пиры</div><div class="server-status" id="mesh-status">Поиск...</div></div>
-    </div>
-    <button id="btn-refresh">🔄 Проверить</button>
-    <div class="log-box" id="log-box"></div>
-    <div class="stats-row">
-        <span>ID: <span id="node-id">-</span></span>
-        <span>Каналы: <span id="ch-count">0</span></span>
-        <span>Пиры: <span id="peer-count">0</span></span>
-    </div>
-</div>
-<script>
 /**
- * P2PPong v5.0 — Автономный сигнальный модуль
- * Полностью управляет маяками, поллингом, шифрованием трафика.
- * API для клиента (RobinHood): createArrow, acceptArrow, send, on, getPeerId
+ * P2PPong v5.0 — Бронебойная сигнальная машина
+ * Чистый модуль. Ноль зависимостей от DOM, localStorage, интерфейса.
+ * Работает везде: browser, Web Worker, отдельная страница, встроенный модуль.
+ * 
+ * Раньше назывался Пинбол.
  */
+
 const P2PPong = (() => {
     'use strict';
 
     // ==================== КОНФИГУРАЦИЯ ====================
     const SERVERS = [
-        { id: 'render', url: 'https://p2ppong-v2.onrender.com', label: 'Render' },
-        { id: 'workers', url: 'https://robincall.stephanclaps-491.workers.dev', label: 'Workers' }
+        { id: 'render', url: 'https://p2ppong-v2.onrender.com' },
+        { id: 'workers', url: 'https://robincall.stephanclaps-491.workers.dev' }
     ];
 
-    // ==================== ХРАНИЛИЩА ====================
-    let channels = {};           // { sessionId: { status, sessionSecret, server, peerId } }
+    // ==================== СОСТОЯНИЕ ====================
+    let channels = {};           // { sessionId: { status, sessionKey, server, peerId, allServers } }
     let pollIntervals = {};      // { sessionId: intervalId }
-    let callbacks = {};          // { onReady, onChannelOpen, onMessage, onError }
-
-    // ==================== ИДЕНТИФИКАТОРЫ ====================
-    const SESSION_ID = crypto.randomUUID ? crypto.randomUUID() : 
-        Math.random().toString(36).substring(2) + Date.now().toString(36);
-    
-    const PEER_ID = (() => {
-        let stored = localStorage.getItem('pong_peer_id');
-        if (!stored) {
-            stored = crypto.randomUUID ? crypto.randomUUID().substring(0, 16) : 
-                Math.random().toString(36).substring(2, 18);
-            localStorage.setItem('pong_peer_id', stored);
-        }
-        return stored;
-    })();
+    let callbacks = {};          // { onReady, onChannelOpen, onMessage, onError, onSessionCreated }
+    let peerId = null;           // Загружается асинхронно из IndexedDB
+    let sessionId = null;        // Уникальный ID этой сессии (в памяти)
+    let isInitialized = false;
 
     // ==================== УТИЛИТЫ ====================
-    function $(id) { return document.getElementById(id); }
-
-    function log(msg, type = 'info') {
-        console.log('[P2PPong]', msg);
-        const box = $('log-box');
-        if (box) {
-            const entry = document.createElement('div');
-            entry.className = 'log-entry ' + type;
-            entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-            box.insertBefore(entry, box.firstChild);
-            if (box.children.length > 50) box.lastChild.remove();
-        }
-    }
-
-    function updateUI() {
-        const chCount = Object.keys(channels).length;
-        const el = $('ch-count'); if (el) el.textContent = chCount;
-        const nid = $('node-id'); if (nid) nid.textContent = PEER_ID.substring(0, 10) + '...';
+    function generateToken() {
+        return crypto.randomUUID?.() || 
+            Math.random().toString(36).substring(2) + Date.now().toString(36);
     }
 
     async function sha256(text) {
         const data = new TextEncoder().encode(text);
         const hash = await crypto.subtle.digest('SHA-256', data);
-        return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+        return Array.from(new Uint8Array(hash))
+            .map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function log(msg) {
+        console.log('[P2PPong]', msg);
+    }
+
+    // ==================== ХРАНИЛИЩЕ (IndexedDB, без localStorage) ====================
+    async function openDB() {
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open('P2PPongSecure', 1);
+            req.onupgradeneeded = () => {
+                if (!req.result.objectStoreNames.contains('identity'))
+                    req.result.createObjectStore('identity', { keyPath: 'id' });
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    async function getOrCreatePeerId() {
+        if (peerId) return peerId;
+        
+        try {
+            const db = await openDB();
+            const tx = db.transaction('identity', 'readonly');
+            const store = tx.objectStore('identity');
+            const stored = await new Promise((resolve, reject) => {
+                const req = store.get('peerId');
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+            
+            if (stored?.value) {
+                peerId = stored.value;
+                return peerId;
+            }
+        } catch (e) {
+            log('IndexedDB недоступна, генерируем временный peerId');
+        }
+        
+        // Если IndexedDB не сработала — временный peerId на сессию
+        peerId = generateToken().substring(0, 16);
+        return peerId;
+    }
+
+    async function savePeerId() {
+        try {
+            const db = await openDB();
+            const tx = db.transaction('identity', 'readwrite');
+            tx.objectStore('identity').put({ id: 'peerId', value: peerId });
+        } catch (e) {
+            log('Не удалось сохранить peerId');
+        }
     }
 
     // ==================== AES-GCM ШИФРОВАНИЕ ====================
-    async function encryptPacket(plaintext, baseKey) {
+    async function deriveKey(secret) {
+        const hash = await sha256(secret);
+        const keyBytes = new TextEncoder().encode(hash.substring(0, 32));
+        return await crypto.subtle.importKey(
+            'raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
+        );
+    }
+
+    async function encryptPacket(plaintext, secret) {
         try {
-            const keyHash = await sha256(baseKey);
-            const keyBytes = Uint8Array.from(keyHash.substring(0, 32).split('').map(c => c.charCodeAt(0)));
-            const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['encrypt']);
+            const key = await deriveKey(secret);
             const iv = crypto.getRandomValues(new Uint8Array(12));
             const encoded = new TextEncoder().encode(plaintext);
             const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
@@ -135,12 +113,10 @@ const P2PPong = (() => {
         }
     }
 
-    async function decryptPacket(encryptedText, baseKey) {
+    async function decryptPacket(encryptedText, secret) {
         if (!encryptedText || !encryptedText.startsWith('🔐')) return null;
         try {
-            const keyHash = await sha256(baseKey);
-            const keyBytes = Uint8Array.from(keyHash.substring(0, 32).split('').map(c => c.charCodeAt(0)));
-            const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
+            const key = await deriveKey(secret);
             const combined = Uint8Array.from(atob(encryptedText.substring(2)), c => c.charCodeAt(0));
             const iv = combined.slice(0, 12);
             const ct = combined.slice(12);
@@ -155,11 +131,18 @@ const P2PPong = (() => {
     async function apiCall(serverId, method, path, body = null) {
         const server = SERVERS.find(s => s.id === serverId);
         if (!server) return null;
+        
         const ctrl = new AbortController();
         const timeout = setTimeout(() => ctrl.abort(), serverId === 'workers' ? 5000 : 10000);
+        
         try {
-            const opts = { method, headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal };
+            const opts = {
+                method,
+                headers: { 'Content-Type': 'application/json' },
+                signal: ctrl.signal
+            };
             if (body) opts.body = JSON.stringify(body);
+            
             const res = await fetch(server.url + path, opts);
             clearTimeout(timeout);
             if (!res.ok) return null;
@@ -186,8 +169,9 @@ const P2PPong = (() => {
 
                 // Пробуем расшифровать
                 let decrypted = await decryptPacket(m.packet, ch.sessionSecret);
+                
+                // Если не расшифровалось — пробуем как голый JSON (обратная совместимость)
                 if (!decrypted) {
-                    // Если не получилось — пробуем как голый JSON (для обратной совместимости)
                     try {
                         const parsed = JSON.parse(m.packet);
                         decrypted = parsed.text || m.packet;
@@ -196,7 +180,7 @@ const P2PPong = (() => {
                     }
                 }
 
-                // Парсим отправителя
+                // Извлекаем отправителя
                 let sender = null;
                 let text = decrypted;
                 try {
@@ -206,7 +190,7 @@ const P2PPong = (() => {
                 } catch (e) {}
 
                 // Фильтруем свои сообщения
-                if (sender === SESSION_ID) {
+                if (sender === sessionId) {
                     const msgTime = m.time > 9999999999 ? m.time : m.time * 1000;
                     lastTime = Math.max(lastTime, msgTime);
                     continue;
@@ -237,60 +221,58 @@ const P2PPong = (() => {
         Object.keys(pollIntervals).forEach(stopPolling);
     }
 
-    // ==================== API ДЛЯ ROBINHOOD ====================
+    // ==================== ОСНОВНЫЕ МЕТОДЫ ====================
 
     /**
      * Создать стрелу (маяк)
-     * Вызывает onSessionCreated({ fullLink, peerId, key })
-     * При успехе вызывает onChannelOpen({ channelId, role: 'creator', peerId })
+     * Вызывает колбэки: onSessionCreated, onChannelOpen
      */
     async function createArrow() {
-        const tempKey = crypto.randomUUID ? crypto.randomUUID() : 
-            Math.random().toString(36).substring(2) + Date.now().toString(36);
+        await ensureInit();
+        
+        const tempKey = generateToken();
         const tempKeyHash = await sha256(tempKey);
+        const sessionSecret = tempKey; // Для AES-GCM используем tempKey как секрет
 
         log('Создание маяка...');
         const results = [];
 
         for (const server of SERVERS) {
-            const body = server.id === 'workers' 
-                ? { tempKeyHash, publicId: PEER_ID }
-                : { tempKey: tempKey, tempKeyHash, publicId: PEER_ID };
+            const body = server.id === 'workers'
+                ? { tempKeyHash, publicId: peerId }
+                : { tempKey: tempKey, tempKeyHash, publicId: peerId };
+            
             const res = await apiCall(server.id, 'POST', '/beacon', body);
             if (res?.sessionId) {
                 results.push({ sessionId: res.sessionId, server: server.id });
-                log('Маяк на ' + server.label + ': ' + res.sessionId.substring(0, 8), 'success');
+                log('Маяк на ' + server.id + ': ' + res.sessionId.substring(0, 8));
             }
         }
 
         if (results.length === 0) {
-            if (callbacks.onError) callbacks.onError({ text: 'Серверы не отвечают' });
+            if (callbacks.onError) callbacks.onError({ text: 'Все серверы не отвечают' });
             return;
         }
 
         const primary = results[0];
         const sid = primary.sessionId;
-        const sessionSecret = await sha256(tempKey);
 
         channels[sid] = {
             status: 'waiting',
             sessionSecret,
             server: primary.server,
-            peerId: PEER_ID,
+            peerId: peerId,
             allServers: results.map(r => r.server)
         };
 
         const serversParam = results.map(r => r.server).join(',');
-        const fullLink = `https://stepweather-prog.github.io/ROBINHOOD-P2P/?id=${sid}&servers=${serversParam}&peer=${PEER_ID}&key=${tempKey}`;
+        const fullLink = `https://stepweather-prog.github.io/ROBINHOOD-P2P/?id=${sid}&servers=${serversParam}&peer=${peerId}&key=${tempKey}`;
 
         if (callbacks.onSessionCreated) {
-            callbacks.onSessionCreated({ fullLink, peerId: PEER_ID, key: tempKey });
+            callbacks.onSessionCreated({ fullLink, peerId, key: tempKey });
         }
 
-        log('Стрела: ' + fullLink.substring(0, 60) + '...', 'info');
-        updateUI();
-
-        // Ждём matched
+        // Ожидание matched
         let matched = false;
         const start = Date.now();
         while (Date.now() - start < 90000) {
@@ -303,48 +285,49 @@ const P2PPong = (() => {
 
         if (!matched) {
             delete channels[sid];
-            updateUI();
             if (callbacks.onError) callbacks.onError({ text: 'Таймаут ожидания' });
             return;
         }
 
         channels[sid].status = 'open';
         startPolling(sid, channels[sid].server);
-        updateUI();
 
         if (callbacks.onChannelOpen) {
-            callbacks.onChannelOpen({ channelId: sid, role: 'creator', peerId: PEER_ID });
+            callbacks.onChannelOpen({ channelId: sid, role: 'creator', peerId });
         }
-        log('Канал открыт!', 'success');
+        log('Канал открыт!');
     }
 
     /**
      * Принять стрелу
-     * @param {string} peerId - ID пира из ссылки
-     * @param {string} tempKey - ключ из ссылки
      */
-    async function acceptArrow(peerId, tempKey) {
+    async function acceptArrow(peerIdFromLink, tempKey) {
+        await ensureInit();
+        
         const keyHash = await sha256(tempKey);
+        const sessionSecret = tempKey;
 
-        log('Поиск маяка для пира ' + peerId + '...');
+        log('Поиск маяка для пира ' + peerIdFromLink + '...');
 
-        // Пробуем /find-by-peer (может не работать на старых серверах)
+        // Пробуем новый метод
         for (const server of SERVERS) {
             try {
                 const res = await apiCall(server.id, 'POST', '/find-by-peer', {
-                    targetPublicId: peerId,
-                    myPublicId: PEER_ID,
+                    targetPublicId: peerIdFromLink,
+                    myPublicId: peerId,
                     tempKeyHash: keyHash
                 });
                 if (res?.status === 'matched') {
-                    await openChannel(res.sessionId, server.id, tempKey, peerId);
+                    await openChannel(res.sessionId, server.id, sessionSecret, peerIdFromLink);
                     return;
                 }
             } catch (e) {}
         }
 
-        // Fallback: старый поиск по sessionId
-        const urlParams = new URLSearchParams(window.location.search);
+        // Fallback: старый метод
+        const urlParams = new URLSearchParams(
+            typeof window !== 'undefined' ? window.location.search : ''
+        );
         const serversParam = urlParams.get('servers') || 'render,workers';
         const serversList = serversParam.split(',');
         const sid = urlParams.get('id');
@@ -353,7 +336,7 @@ const P2PPong = (() => {
             const body = srvId === 'workers' ? { tempKeyHash: keyHash } : { tempKey };
             const res = await apiCall(srvId, 'POST', '/find', body);
             if (res?.status === 'matched') {
-                await openChannel(res.sessionId || sid, srvId, tempKey, peerId);
+                await openChannel(res.sessionId || sid, srvId, sessionSecret, peerIdFromLink);
                 return;
             }
         }
@@ -361,38 +344,35 @@ const P2PPong = (() => {
         if (callbacks.onError) callbacks.onError({ text: 'Маяк не найден' });
     }
 
-    async function openChannel(sid, serverId, tempKey, peerId) {
-        const sessionSecret = await sha256(tempKey);
-
+    async function openChannel(sid, serverId, sessionSecret, peerIdFromLink) {
         channels[sid] = {
             status: 'open',
             sessionSecret,
             server: serverId,
-            peerId: peerId
+            peerId: peerIdFromLink
         };
 
         startPolling(sid, serverId);
-        updateUI();
 
         if (callbacks.onChannelOpen) {
-            callbacks.onChannelOpen({ channelId: sid, role: 'receiver', peerId });
+            callbacks.onChannelOpen({ channelId: sid, role: 'receiver', peerId: peerIdFromLink });
         }
-        log('Подключено через ' + serverId + '!', 'success');
+        log('Подключено через ' + serverId + '!');
     }
 
     /**
-     * Отправить сообщение в активный канал
-     * @param {string} channelId
-     * @param {string} text
+     * Отправить сообщение в канал
      */
     async function sendMessage(channelId, text) {
+        await ensureInit();
+        
         const ch = channels[channelId];
         if (!ch) {
             if (callbacks.onError) callbacks.onError({ text: 'Канал не найден', channelId });
             return;
         }
 
-        const payload = JSON.stringify({ text, sender: SESSION_ID, time: Date.now() });
+        const payload = JSON.stringify({ text, sender: sessionId, time: Date.now() });
         const encrypted = await encryptPacket(payload, ch.sessionSecret);
 
         const res = await apiCall(ch.server, 'POST', '/message', {
@@ -401,61 +381,103 @@ const P2PPong = (() => {
         });
 
         if (!res) {
-            log('Ошибка отправки, сессия возможно истекла', 'error');
+            log('Ошибка отправки', 'error');
             delete channels[channelId];
             stopPolling(channelId);
-            updateUI();
             if (callbacks.onError) callbacks.onError({ text: 'session_not_found', channelId });
         }
     }
 
     /**
-     * Подписаться на события
-     * @param {'onReady'|'onChannelOpen'|'onMessage'|'onError'|'onSessionCreated'} event
-     * @param {function} cb
+     * Подписка на события
      */
-    function on(event, cb) { callbacks[event] = cb; }
+    function on(event, cb) {
+        callbacks[event] = cb;
+    }
 
     /**
      * Получить свой PeerId
      */
-    function getPeerId() { return PEER_ID; }
+    function getPeerId() {
+        return peerId;
+    }
 
-    // ==================== ПРОВЕРКА СЕРВЕРОВ ====================
+    /**
+     * Проверить статус серверов
+     */
     async function checkServers() {
+        const statuses = {};
         for (const server of SERVERS) {
             const ping = await apiCall(server.id, 'GET', '/ping');
-            const status = ping ? 'online' : 'offline';
-            const el = $(server.id + '-status');
-            if (el) el.textContent = (status === 'online' ? '🟢 ' : '🔴 ') + (status === 'online' ? 'Онлайн' : 'Офлайн');
-            const card = $('card-' + server.id);
-            if (card) card.classList.toggle('active', status === 'online');
+            statuses[server.id] = ping ? 'online' : 'offline';
         }
-        const dot = $('status-dot');
-        const txt = $('status-text');
-        if (dot) dot.className = 'status-dot online';
-        if (txt) txt.textContent = '✅ Готов';
+        return statuses;
     }
 
     // ==================== ИНИЦИАЛИЗАЦИЯ ====================
-    async function init() {
-        log('P2PPong v5.0 запуск...');
-        await checkServers();
-        updateUI();
-        if (callbacks.onReady) callbacks.onReady();
-        log('Готов. PeerId: ' + PEER_ID.substring(0, 10) + '...', 'success');
+    async function ensureInit() {
+        if (!isInitialized) await init();
     }
 
-    // ==================== ОБРАБОТЧИКИ UI (для standalone режима) ====================
-    $('btn-refresh')?.addEventListener('click', checkServers);
-    window.addEventListener('beforeunload', stopAllPolling);
+    async function init() {
+        if (isInitialized) return;
+        
+        sessionId = generateToken();
+        await getOrCreatePeerId();
+        await savePeerId();
+        
+        log('P2PPong v5.0 запущен. PeerId: ' + peerId.substring(0, 10) + '...');
+        
+        // Пингуем серверы
+        const statuses = await checkServers();
+        const online = Object.values(statuses).some(s => s === 'online');
+        
+        isInitialized = true;
+        
+        if (callbacks.onReady) {
+            callbacks.onReady({ peerId, statuses, online });
+        }
+    }
+
+    // ==================== ЖИЗНЕННЫЙ ЦИКЛ ====================
+    function destroy() {
+        stopAllPolling();
+        channels = {};
+        callbacks = {};
+        isInitialized = false;
+    }
 
     // ==================== ПУБЛИЧНОЕ API ====================
-    return { init, createArrow, acceptArrow, sendMessage, on, getPeerId };
+    return {
+        // Основные методы
+        init,
+        createArrow,
+        acceptArrow,
+        sendMessage,
+        
+        // Подписки
+        on,
+        
+        // Информация
+        getPeerId,
+        checkServers,
+        
+        // Жизненный цикл
+        destroy,
+        
+        // Служебное (для обратной совместимости)
+        getSessionId: () => sessionId
+    };
 })();
 
 // ==================== АВТОЗАПУСК ====================
-P2PPong.init();
-</script>
-</body>
-</html>
+// Если модуль загружен в браузере — запускаемся
+if (typeof window !== 'undefined') {
+    P2PPong.init().catch(e => console.error('[P2PPong] Init error:', e));
+}
+
+// ==================== ЭКСПОРТ ====================
+// Для использования как ES модуль
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = P2PPong;
+}
