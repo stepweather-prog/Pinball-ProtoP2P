@@ -283,7 +283,18 @@
         if (event.source !== window.parent) return;
         const data = event.data; if (!data || !data.action) return;
         if (data.action === 'handshake') { if (data.handshake === handshakeSecret) { handshakeSecret = null; sendToParent({ type: 'handshake-ok' }); log('Handshake OK', 'success'); } return; }
-        if (data.action === 'send') { const ch = channels[data.channelId]; if (!ch || !ch.sessionSecret) { sendToParent({ type: 'error', text: 'Канал не найден' }); return; } const packet = JSON.stringify({ text: data.text, sender: NODE_ID, time: Date.now() }); apiCall('POST', '/message', { sessionId: data.channelId, packet }); return; }
+                if (data.action === 'send') { 
+            let ch = channels[data.channelId]; 
+            if (!ch) {
+                for (const [id, channel] of Object.entries(channels)) {
+                    if (channel.sessionSecret === data.secret) { ch = channel; data.channelId = id; break; }
+                }
+            }
+            if (!ch) { sendToParent({ type: 'error', text: 'Канал не найден' }); return; } 
+            const packet = JSON.stringify({ text: data.text, sender: NODE_ID, time: Date.now() }); 
+            apiCall('POST', '/message', { sessionId: data.channelId, packet }); 
+            return; 
+        }
         if (data.action === 'server-switch' && data.server && data.server !== currentServer) { switchServer(data.server); return; }
         if (data.action === 'get-status') { sendToParent({ type: 'server-status', server: currentServer, status: serverStatuses[currentServer], channels: Object.keys(channels).length, max: MAX_CH, isPWA: isPWA }); return; }
         switch (data.action) { case 'create': createSession(data.tempKey); break; case 'accept': if (data.id) acceptSession(data.id, data.key || ''); break; case 'cancel-create': log('Создание отменено', 'info'); break; }
