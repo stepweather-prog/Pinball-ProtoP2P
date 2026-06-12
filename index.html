@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>P2PPong v5.0</title>
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' https://p2ppong-v2.onrender.com https://robincall.stephanclaps-491.workers.dev https://* wss://*;">
+    <link rel="icon" href="data:,">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://p2ppong-v2.onrender.com https://robincall.stephanclaps-491.workers.dev https://* wss://*;">
     <style>
         :root { --bg: #0d1a0c; --bg2: #1a2a1f; --accent: #c4a24b; --accent2: #e8d5a3; --text: #e8e2c7; --dim: #b8a87a; --border: #c4a24b; --green: #4caf50; --red: #f44336; --orange: #ff9800; --blue: #4bc4d0; }
@@ -60,19 +60,15 @@
 <script>
 /**
  * P2PPong v5.0 Standalone — Бронебойная сигнальная машина (Пинбол)
- * Отдельная страница. Может работать как самостоятельный интерфейс
- * или как iframe для RobinHood (через postMessage).
  */
 (function() {
     'use strict';
 
-    // ==================== КОНФИГУРАЦИЯ ====================
     const SERVERS = [
         { id: 'render', url: 'https://p2ppong-v2.onrender.com' },
         { id: 'workers', url: 'https://robincall.stephanclaps-491.workers.dev' }
     ];
 
-    // ==================== СОСТОЯНИЕ ====================
     let channels = {};
     let pollIntervals = {};
     let callbacks = {};
@@ -81,7 +77,6 @@
     let isInitialized = false;
     let handshakeSecret = null;
 
-    // ==================== DOM ====================
     function $(id) { return document.getElementById(id); }
 
     function log(msg, type = 'info') {
@@ -90,7 +85,7 @@
         if (box) {
             const entry = document.createElement('div');
             entry.className = 'log-entry ' + type;
-            entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            entry.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
             box.insertBefore(entry, box.firstChild);
             if (box.children.length > 50) box.lastChild.remove();
         }
@@ -104,10 +99,8 @@
         const txt = $('status-text'); if (txt) txt.textContent = '✅ Готов';
     }
 
-    // ==================== УТИЛИТЫ ====================
     function generateToken() {
-        return crypto.randomUUID?.() || 
-            Math.random().toString(36).substring(2) + Date.now().toString(36);
+        return crypto.randomUUID?.() || Math.random().toString(36).substring(2) + Date.now().toString(36);
     }
 
     async function sha256(text) {
@@ -116,7 +109,6 @@
         return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
     }
 
-    // ==================== ХРАНИЛИЩЕ (IndexedDB) ====================
     async function openDB() {
         return new Promise((resolve, reject) => {
             const req = indexedDB.open('P2PPongSecure', 1);
@@ -142,7 +134,6 @@
             });
             if (stored?.value) { peerId = stored.value; return peerId; }
         } catch (e) { log('IndexedDB недоступна', 'error'); }
-        
         peerId = generateToken().substring(0, 16);
         try {
             const db = await openDB();
@@ -152,7 +143,6 @@
         return peerId;
     }
 
-    // ==================== AES-GCM ====================
     async function deriveKey(secret) {
         const hash = await sha256(secret);
         const keyBytes = new TextEncoder().encode(hash.substring(0, 32));
@@ -182,7 +172,6 @@
         } catch (e) { return null; }
     }
 
-    // ==================== СЕТЕВЫЕ ЗАПРОСЫ ====================
     async function apiCall(serverId, method, path, body = null) {
         const server = SERVERS.find(s => s.id === serverId);
         if (!server) return null;
@@ -198,7 +187,6 @@
         } catch (e) { clearTimeout(timeout); return null; }
     }
 
-    // ==================== ПОЛЛИНГ ====================
     function startPolling(sid, serverId) {
         if (pollIntervals[sid]) return;
         let lastTime = Date.now();
@@ -214,7 +202,6 @@
                 try { const parsed = JSON.parse(decrypted); sender = parsed.sender; text = parsed.text || decrypted; } catch (e) {}
                 if (sender === sessionId) { const msgTime = m.time > 9999999999 ? m.time : m.time * 1000; lastTime = Math.max(lastTime, msgTime); continue; }
                 if (callbacks.onMessage) callbacks.onMessage({ text, channelId: sid, sender });
-                // Отправка родителю через postMessage (для iframe-режима)
                 sendToParent({ type: 'message', text, channelId: sid, sender });
                 const msgTime = m.time > 9999999999 ? m.time : m.time * 1000; lastTime = Math.max(lastTime, msgTime);
             }
@@ -225,14 +212,12 @@
     function stopPolling(sid) { if (pollIntervals[sid]) { clearInterval(pollIntervals[sid]); delete pollIntervals[sid]; } }
     function stopAllPolling() { Object.keys(pollIntervals).forEach(stopPolling); }
 
-    // ==================== ОТПРАВКА В РОДИТЕЛЬСКОЕ ОКНО ====================
     function sendToParent(msg) {
         if (window.parent && window.parent !== window) {
             try { window.parent.postMessage(msg, '*'); } catch (e) {}
         }
     }
 
-    // ==================== ОСНОВНЫЕ МЕТОДЫ ====================
     async function createArrow() {
         await ensureInit();
         const tempKey = generateToken();
@@ -245,31 +230,20 @@
             const res = await apiCall(server.id, 'POST', '/beacon', body);
             if (res?.sessionId) results.push({ sessionId: res.sessionId, server: server.id });
         }
-        if (results.length === 0) {
-            if (callbacks.onError) callbacks.onError({ text: 'Серверы не отвечают' });
-            sendToParent({ type: 'error', text: 'Серверы не отвечают' });
-            return;
-        }
+        if (results.length === 0) { sendToParent({ type: 'error', text: 'Серверы не отвечают' }); return; }
         const primary = results[0]; const sid = primary.sessionId;
         channels[sid] = { status: 'waiting', sessionSecret, server: primary.server, peerId, allServers: results.map(r => r.server) };
         const serversParam = results.map(r => r.server).join(',');
-        const fullLink = `https://stepweather-prog.github.io/ROBINHOOD-P2P/?id=${sid}&servers=${serversParam}&peer=${peerId}&key=${tempKey}`;
-        
+        const fullLink = 'https://stepweather-prog.github.io/ROBINHOOD-P2P/?id=' + sid + '&servers=' + serversParam + '&peer=' + peerId + '&key=' + tempKey;
         if (callbacks.onSessionCreated) callbacks.onSessionCreated({ fullLink, peerId, key: tempKey });
         sendToParent({ type: 'session-created', sessionId: sid, key: tempKey, fullLink, peerId });
-        
         let matched = false; const start = Date.now();
         while (Date.now() - start < 90000) {
             const checks = await Promise.all(results.map(r => apiCall(r.server, 'GET', '/beacon?id=' + r.sessionId)));
             if (checks.some(c => c?.matched)) { matched = true; break; }
             await new Promise(r => setTimeout(r, 5000));
         }
-        if (!matched) {
-            delete channels[sid];
-            if (callbacks.onError) callbacks.onError({ text: 'Таймаут ожидания' });
-            sendToParent({ type: 'error', text: 'Таймаут ожидания' });
-            return;
-        }
+        if (!matched) { delete channels[sid]; sendToParent({ type: 'error', text: 'Таймаут ожидания' }); return; }
         channels[sid].status = 'open'; startPolling(sid, channels[sid].server);
         updateUI();
         if (callbacks.onChannelOpen) callbacks.onChannelOpen({ channelId: sid, role: 'creator', peerId });
@@ -297,7 +271,6 @@
             const res = await apiCall(srvId, 'POST', '/find', body);
             if (res?.status === 'matched') { await openChannel(res.sessionId || sid, srvId, sessionSecret, peerIdFromLink); return; }
         }
-        if (callbacks.onError) callbacks.onError({ text: 'Маяк не найден' });
         sendToParent({ type: 'error', text: 'Маяк не найден' });
     }
 
@@ -313,19 +286,11 @@
     async function sendMessage(channelId, text) {
         await ensureInit();
         const ch = channels[channelId];
-        if (!ch) {
-            if (callbacks.onError) callbacks.onError({ text: 'Канал не найден', channelId });
-            sendToParent({ type: 'error', text: 'Канал не найден', channelId });
-            return;
-        }
+        if (!ch) { sendToParent({ type: 'error', text: 'Канал не найден', channelId }); return; }
         const payload = JSON.stringify({ text, sender: sessionId, time: Date.now() });
         const encrypted = await encryptPacket(payload, ch.sessionSecret);
         const res = await apiCall(ch.server, 'POST', '/message', { sessionId: channelId, packet: encrypted });
-        if (!res) {
-            delete channels[channelId]; stopPolling(channelId); updateUI();
-            if (callbacks.onError) callbacks.onError({ text: 'session_not_found', channelId });
-            sendToParent({ type: 'error', text: 'session_not_found', channelId });
-        }
+        if (!res) { delete channels[channelId]; stopPolling(channelId); updateUI(); sendToParent({ type: 'error', text: 'session_not_found', channelId }); }
     }
 
     function on(event, cb) { callbacks[event] = cb; }
@@ -357,36 +322,19 @@
         if (callbacks.onReady) callbacks.onReady({ peerId });
     }
 
-    // ==================== ОБРАБОТЧИК postMessage (для iframe-режима) ====================
     window.addEventListener('message', (event) => {
         if (event.source !== window.parent) return;
         const data = event.data;
         if (!data || !data.action) return;
-
-        if (data.action === 'handshake') {
-            if (data.handshake === handshakeSecret) {
-                handshakeSecret = null;
-                sendToParent({ type: 'handshake-ok' });
-            }
-            return;
-        }
+        if (data.action === 'handshake') { if (data.handshake === handshakeSecret) { handshakeSecret = null; sendToParent({ type: 'handshake-ok' }); } return; }
         if (data.action === 'create') { createArrow(); return; }
         if (data.action === 'accept' && data.id) { acceptArrow(data.id, data.key || ''); return; }
-        if (data.action === 'send') {
-            sendMessage(data.channelId || Object.keys(channels)[0], data.text);
-            return;
-        }
-        if (data.action === 'get-status') {
-            sendToParent({ type: 'server-status', channels: Object.keys(channels).length, peerId });
-            return;
-        }
+        if (data.action === 'send') { sendMessage(data.channelId || Object.keys(channels)[0], data.text); return; }
+        if (data.action === 'get-status') { sendToParent({ type: 'server-status', channels: Object.keys(channels).length, peerId }); return; }
     });
 
-    // ==================== UI-ОБРАБОТЧИКИ (standalone режим) ====================
     $('btn-refresh')?.addEventListener('click', checkServers);
     window.addEventListener('beforeunload', stopAllPolling);
-
-    // ==================== АВТОЗАПУСК ====================
     init().catch(e => log('Ошибка инициализации: ' + e.message, 'error'));
 })();
 </script>
